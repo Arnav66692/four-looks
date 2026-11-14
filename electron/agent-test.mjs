@@ -629,7 +629,7 @@ await check('questions and show-me requests take the search fast path, screen qu
 
 await check('opening an app alone does not end the run: the model must say done', async () => {
   const f = fixture([call('open_app', { name: 'Messages' }), call('done', { summary: 'Finished' })]);
-  const result = await f.agent.run('Text a friend that the meeting moved');
+  const result = await f.agent.run('Let a friend know the meeting moved');
   assert.equal(result.ok, true);
   assert.equal(result.modelCalls, 2);
   assert.equal(result.summary, 'Finished');
@@ -693,6 +693,41 @@ await check('after acting the next turn gets a fresh control list, not a screens
   assert.equal(f.requests[1].messages.some((m) => Array.isArray(m.content)), false);
   assert.match(f.requests[1].messages.at(-1).content, /Controls, press by id/);
   assert.equal(f.requests[1].messages.filter((m) => typeof m.content === 'string' && /Controls, press by id/.test(m.content)).length, 1);
+});
+
+await check('opening a chat does not ask for a nod just because the plan mentions sending', async () => {
+  const f = fixture([batch(call('press', { id: 2, reason: 'Open the chat with Sam to send a message' }), call('done', { summary: 'Message sent to Sam' }))], { elements: async () => CONTROLS });
+  const result = await f.agent.run('Open my chat with Sam');
+  assert.equal(result.ok, true);
+  assert.equal(f.confirmations.length, 0);
+  assert.equal(f.events.filter(([name]) => name === 'click').length, 1);
+});
+
+await check('the same press three times running stops the run instead of looping', async () => {
+  const f = fixture([call('press', { id: 1 })], { elements: async () => CONTROLS });
+  const result = await f.agent.run('Start a new conversation in this window');
+  assert.equal(result.stoppedWhy, 'No progress');
+  assert.equal(f.events.filter(([name]) => name === 'click').length, 2);
+  assert.equal(result.modelCalls, 3);
+});
+
+await check('a text message runs by keyboard with no model call, and only the sending Return asks', async () => {
+  const f = fixture([], { confirm: async (q) => { f.confirmations.push(q); return true; } });
+  const result = await f.agent.run('text Sam that I am running ten minutes late');
+  assert.equal(result.ok, true);
+  assert.equal(result.routed, true);
+  assert.equal(result.modelCalls, 0);
+  assert.deepEqual(f.events, [['open_app', 'Messages'], ['key', 45, ['cmd']], ['type', 'Sam'], ['key', 36, []], ['key', 48, []], ['type', 'I am running ten minutes late'], ['key', 36, []]]);
+  assert.equal(f.confirmations.length, 1);
+  assert.match(f.confirmations[0], /Send to Sam: I am running ten minutes late/);
+});
+
+await check('a declined nod leaves the text message typed but not sent', async () => {
+  const f = fixture([]);
+  const result = await f.agent.run('message Sam saying see you at noon');
+  assert.equal(result.stoppedWhy, 'Confirmation declined');
+  assert.equal(f.events.filter(([name, code]) => name === 'key' && code === 36).length, 1);
+  assert.deepEqual(f.events.at(-1), ['type', 'see you at noon']);
 });
 
 await check('look still brings a screenshot when the list is not enough', async () => {

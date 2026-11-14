@@ -48,6 +48,24 @@ function single(raw) {
     return urlAction(`https://mail.google.com/mail/?view=cm&fs=1&to=${encode(to)}&su=${encode(subject?.[1] ?? '')}&body=${encode(body)}`,
       'The email draft is open. Nothing was sent.');
   }
+  // A text message, by keyboard only: new message, the name, the words, and the Return that sends it waits for a nod.
+  // Not yet rehearsed on a real Messages window. If it misbehaves, the nod is the stop.
+  if ((match = text.match(/^(?:text|message|imessage)\s+(.+?)\s+(?:that|saying|:)\s+([\s\S]+)$/i))) {
+    const to = match[1].trim(), words = match[2].trim().replace(/^i am\b/i, 'I am');
+    if (!to || !words || /[\r\n\t]/.test(to + words)) return null;
+    return { summary: `Sent to ${to}: ${words}`, actions: [
+      { name: 'open_app', args: { name: 'Messages', reason: 'Opening Messages' } },
+      { name: 'wait', args: { ms: 600, reason: 'Waiting for Messages' } },
+      { name: 'key', args: { name: 'cmd+n', reason: 'New message' } },
+      { name: 'wait', args: { ms: 300, reason: 'New message' } },
+      { name: 'type', args: { text: to, reason: `Finding ${to}` } },
+      { name: 'wait', args: { ms: 600, reason: `Finding ${to}` } },
+      { name: 'key', args: { name: 'return', reason: `Choosing ${to}` }, safe: true },      // picks the contact, sends nothing
+      { name: 'key', args: { name: 'tab', reason: 'Moving to the message box' } },
+      { name: 'type', args: { text: words, reason: 'Typing your message' } },
+      { name: 'key', args: { name: 'return', reason: `Send to ${to}: ${words}`, irreversible: true } },
+    ] };
+  }
   if ((match = command.match(/^(?:search youtube for|youtube)\s+(.+)$/i)))
     return urlAction(`https://www.youtube.com/results?search_query=${encodeURIComponent(match[1])}`);
   if ((match = command.match(/^wikipedia\s+(.+)$/i)))
