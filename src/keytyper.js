@@ -6,6 +6,7 @@ export const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const LOG10 = Math.log(10);
 const OOV_PRIOR = -7.0;          // log10 word-model score given to a word the dictionary lacks
 const LEARNED_PRIOR = -3.5;      // log10 score of a word from the person's own list
+const USED_BOOST = 0.35;      // how much a word this person has used before rises (log10 units per tenfold use)
 const ADDED_APOSTROPHE = -1.0;   // cost of a dictionary word adding an apostrophe you did not type
 const RAW_CHARS = /[@#:/$_\-0-9+=&%*]/;   // once one of these is in a token, nothing in it is corrected
 const SENTENCE_END = /[.!?]\s*$/;
@@ -18,6 +19,7 @@ export class KeyTyper {
     this.shift = "once";     // off | once | lock. Starts capitalised.
     this.raw = false;        // inside an email, link, tag, time or number
     this.learned = new Set();
+    this.used = new Map();   // how often this person has used each word: their words rise in the guesses
     this.undoStack = [];
     this.lastFix = null;     // { from, to } when autocorrect last changed a word
   }
@@ -34,6 +36,13 @@ export class KeyTyper {
     this.lastFix = null;
     return true;
   }
+
+  noteUse(word) {
+    const w = String(word).toLowerCase().replace(/[^a-z']/g, "");
+    if (w) this.used.set(w, (this.used.get(w) || 0) + 1);
+  }
+  // Extra score for a word this person has used before (log10 units, grows slowly).
+  boost(word) { return USED_BOOST * Math.log10(1 + (this.used.get(String(word).toLowerCase()) || 0)); }
 
   learn(words) { for (const w of words) if (/^[a-z']+$/i.test(w)) this.learned.add(w.toLowerCase()); }
 
@@ -182,16 +191,19 @@ export class KeyTyper {
       if (!succ) return [];
       // Do not offer a word the person used in the last two words ("I am I").
       const recent = new Set(this.committed.toLowerCase().trim().split(/\s+/).slice(-2));
-      return [...succ.entries()].sort((a, b) => b[1] - a[1]).filter(([id]) => !recent.has(this.dec.words[id])).slice(0, n).map(([id]) => this.caseNext(this.dec.words[id]));
+      return [...succ.entries()].map(([id, lp]) => [id, lp + this.boost(this.dec.words[id])]).sort((a, b) => b[1] - a[1])
+        .filter(([id]) => !recent.has(this.dec.words[id])).slice(0, n).map(([id]) => this.caseNext(this.dec.words[id]));
     }
     const best = this.bestWord();
     const typed = this.exactCase(this.typedWord());
-    const longer = this.completions(2);
+    const longer = this.completions(3);
     const others = this.raw ? [] : this.ranked(3).map((c) => (c.typed ? typed : this.caseLike(c.word)));
     // Best same-length word, the two likeliest longer words, then other same-length guesses and the exact letters.
     // Big keys: the best same-length word, then the likeliest longer word, then the rest.
     if (this.groupMode()) return [...new Set([best, longer[0], ...others, longer[1]])].filter(Boolean).slice(0, n + 2);
-    const order = [best, ...longer, ...others, typed];
+    // The first (bold) guess is the likeliest LONGER word. The same-length word is what space gives anyway,
+    // and in his own sessions 8 of 12 words picked while typing were longer than the letters typed.
+    const order = [longer[0], best, longer[1], longer[2], ...others, typed].filter(Boolean);
     const out = [...new Set(order)].slice(0, n + 1);
     if (!out.includes(typed) && typed !== best) out[out.length - 1] = typed;
     return out;
@@ -201,15 +213,29 @@ export class KeyTyper {
     if (!this.pending.length) return;
     const typed = this.exactCase(this.typedWord()), best = this.bestWord();
     this.lastFix = best !== typed && !this.groupMode() ? { from: typed, to: best } : null;
+    this.noteUse(best);
     this.committed += best;
     this.pending = [];
+  }
+
+  // Autocorrect just changed a word and the person said no: put back the exact letters they typed, and
+  // remember that word so it is left alone from now on. Only that word is affected.
+  keepTyped(fix) {
+    const tail = this.committed.match(/\s*$/)[0];
+    const body = this.committed.slice(0, this.committed.length - tail.length);
+    if (!fix || !body.endsWith(fix.to)) return false;
+    this.committed = body.slice(0, body.length - fix.to.length) + fix.from + tail;
+    this.learn([fix.from]);
+    return true;
   }
 
   // Longer words that start with what is typed so far.
   completions(n = 2) {
     const slots = this.letterSlots();
     if (!slots.length || ((this.raw || this.deliberateCase()) && !this.groupMode())) return [];
-    return this.dec.completeWord(slots.map((p) => p.probs), this.history(), { top: n }).map((c) => this.caseLike(c.word));
+    return this.dec.completeWord(slots.map((p) => p.probs), this.history(), { top: n + 5 })
+      .map((c) => ({ word: c.word, score: c.score + this.boost(c.word) })).sort((a, b) => b.score - a.score)
+      .slice(0, n).map((c) => this.caseLike(c.word));
   }
 
   // The words most likely to follow a word, one after another (a short phrase guess).
@@ -260,6 +286,7 @@ export class KeyTyper {
     this.alt = 0;
     if (this.pending.length && word === this.exactCase(this.typedWord()) && this.dec.idOf(word.toLowerCase()) < 0) this.learn([word]);
     this.pending = [];
+    this.noteUse(word);
     this.committed += word + " ";
     this.raw = false;
     if (this.shift === "once") this.shift = "off";

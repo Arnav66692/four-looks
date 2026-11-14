@@ -35,6 +35,8 @@ const CHIP_ORDER = [3, 1, 0, 2, 4];     // slot -> guess rank: the best guess si
 const POINTER_KEY = "fourlooks.pointer.v4";      // v4: follow-the-dots fit, with a line-up check
 const HOLD_KEY = "fourlooks.hold.v1";
 const WORDS_KEY = "fourlooks.words.v1";
+const USED_KEY = "fourlooks.used.v1";                    // how often each word has been used, so guesses learn the person
+let usedSaved = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const LAYOUTS = {
@@ -42,7 +44,7 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "menu", "mouse", "space", "undo", "fix", "grok", "speak"],
+    ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
   // Every letter on its own key, arranged for a head and not for hands. The ten most used letters
   // (e t a o i n s h r d) fill the middle row with the busiest in the centre, the next eight sit below
@@ -51,7 +53,7 @@ const LAYOUTS = {
     ["⌫", ..."qjvpbkxz", "'", "send"],
     [..."rsiaetonhd"],
     ["shift", ..."gwulcmfy", ",", ".", "?"],
-    ["123", "menu", "mouse", "space", "undo", "fix", "grok", "speak"],
+    ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
   // Boxes: built around where the head rests, not where hands rest. Share of English letters by key:
   // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
@@ -168,7 +170,7 @@ function updateKeys() {
     } else if (ICONS[k]) { if (!label.firstChild) label.innerHTML = ICONS[k]; }
     else if (k.startsWith("g:")) label.textContent = [...k.slice(2)].join(" ").toUpperCase();
     else if (k === "layout") label.textContent = LAYOUT_NAME[LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]];
-    else label.textContent = isLetter ? k.toUpperCase() : (FACE[k] ?? k);
+    else label.textContent = isLetter ? k.toUpperCase() : (k === "send" && grokMode ? "do it" : (FACE[k] ?? k));
   });
 }
 function measure() {
@@ -185,12 +187,14 @@ function renderText() {
   $("ghostmore").textContent = g && g.more.length ? ` ${g.more.join(" ")}` : "";
   $("textbox").classList.toggle("empty", !typer.text());
   $("textbox").scrollTop = $("textbox").scrollHeight;
-  const sugg = typer.suggestions(3);
+  const quick = grokMode && !typer.text();          // Grok is listening and nothing is typed: offer ready commands
+  const sugg = quick ? QUICK : typer.suggestions(4);
   [...$("chips").children].forEach((el, i) => {
     const w = sugg[CHIP_ORDER[i]];
     el.classList.toggle("empty", !w);
     el.classList.toggle("lead", CHIP_ORDER[i] === 0 && !!w);
     el.dataset.word = w || "";
+    el.dataset.cmd = quick && w ? w : "";
     el.textContent = w || "";
   });
 }
@@ -238,14 +242,31 @@ function noteFix() {
   if (!f) return;
   typer.lastFix = null;
   stats.fixes++;
-  prompt(`Changed "${f.from}" to "${f.to}". Press undo to keep "${f.from}".`);
+  freshFix = { ...f, at: performance.now() };
+  prompt(`Changed "${f.from}" to "${f.to}". Shake your head or press undo to keep "${f.from}".`);
   $("textbox").classList.remove("flash"); void $("textbox").offsetWidth; $("textbox").classList.add("flash");
+}
+
+// Autocorrect runs by itself on every word. A head shake or undo straight after a change says no to it:
+// the letters as typed come back, for that word only, and the word is remembered so it is not changed again.
+let freshFix = null;
+const FIX_SHAKE_MS = 6000;             // a shake counts as "no" for this long after the change
+function keepFix(how) {
+  const f = freshFix;
+  freshFix = null;
+  if (!f || !typer.keepTyped(f)) return false;
+  tick();
+  store(WORDS_KEY, [...typer.learned]);
+  record("keep-typed", { from: f.from, to: f.to, how });
+  prompt(`Kept "${f.from}". It will not be changed again.`);
+  updateKeys(); renderText(); updatePrior(); mirror();
+  return true;
 }
 
 function acceptGhost(how) {
   if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
   if (how === "nod" && grok.busy) { answerGrok(true); return true; }       // while Grok works, a nod only ever means yes
-  if (how === "nod" && mode === "mouse") { clickAtRest("nod"); return true; }
+  if (how === "nod" && mode === "mouse") return true;        // a nod moves the cursor, so it does not click: the mouth does
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
   // Two nods close together take the whole grey phrase: the second nod takes the words shown after the first.
@@ -320,17 +341,21 @@ function press(el, x, y) {
   setTimeout(() => el.classList.remove("pressed"), 120);
   if (k === "menu") { toggleMenu(); return; }
   if (k === "mouse") { setMode("mouse"); return; }
-  if (k === "grok") { runGrok(); return; }
+  if (k === "grokmode") { toggleGrokMode("icon"); return; }
+  if (k === "pick" && el.dataset.cmd) { quickCommand(el.dataset.cmd); return; }
+  if (k === "send" && grokMode) { runGrok(); return; }
   if (k === "dock:stop") { stopGrok("you"); return; }
   if (k === "dock:keyboard") { if (grok.busy) stopGrok("you"); setMode("keyboard"); return; }
   if (k === "dock:quit") { window.fourLooksOut?.quit?.(); return; }
   if (k.startsWith("set:")) { runSetting(k.slice(4)); return; }
+  if (k !== "undo") freshFix = null;          // typing on means the change was accepted
   const before = typer.text().length;
   const edits = !["shift", "123", "abc", "layout", "speak", "undo", "fix"].includes(k);
   const sentNow = k === "send";
   if (edits) typer.save();
   if (k === "undo") {
     if (pendingFix) { pendingFix = null; prompt("Dismissed."); }
+    else if (freshFix && keepFix("undo")) { /* the autocorrect was refused: nothing else to step back */ }
     else { const ok = typer.undo(); record("undo"); prompt(ok ? "Undone." : "Nothing to undo."); }
     countInput("undo", before);
   } else if (k === "fix") { askFix(); }
@@ -358,6 +383,8 @@ function press(el, x, y) {
   else { typer.literal(k); record("symbol", { key: k }); }
   if (edits && k !== "send") countInput(k === "⌫" ? "undo" : "key", before);
   noteFix();
+  if (typer.used.size !== usedSaved) { usedSaved = typer.used.size; store(USED_KEY, [...typer.used]); }
+  else if (k === "pick" || k === "space") store(USED_KEY, [...typer.used]);
   updateKeys();
   renderText();
   updatePrior();
@@ -380,7 +407,7 @@ const LIVE = !!out?.edit;
 let mirrored = "";
 let queue = Promise.resolve();
 function mirror() {
-  if (!LIVE || !typer) return;
+  if (!LIVE || !typer || grokMode) return;      // a command for Grok is never typed into the app in front
   const target = typer.committed;
   let k = 0;
   while (k < mirrored.length && k < target.length && mirrored[k] === target[k]) k++;
@@ -605,14 +632,27 @@ function driveMouse(p, t) {
   desk.mouse("move", x, y);
 }
 // A nod dips the cursor before it is recognised, so click where the cursor was just before.
-function clickAtRest(how) {
+let lastClickAt = 0;
+function clickAtRest(how, backMs = CLICK_BACK_MS) {
   const now = performance.now();
-  const before = [...sent].reverse().find((s) => s.t <= now - CLICK_BACK_MS) || sent[0];
+  if (now - lastClickAt < 450) return;                // one move, one click
+  const before = [...sent].reverse().find((s) => s.t <= now - backMs) || sent[0];
   if (!before) return;
+  lastClickAt = now;
   tick();
   record("click", { how, x: before.x, y: before.y });
   desk.mouse("move", before.x, before.y).then(() => desk.mouse("click", "left", 1));
   const d = $("dock"); d.classList.remove("clicked"); void d.offsetWidth; d.classList.add("clicked");
+}
+// A quick opening of the mouth clicks. The jaw moves without turning the head, so the cursor stays put.
+const MOUTH_OPEN = 0.35;               // jaw-open score that counts as a deliberate opening (talking stays near 0.2)
+const MOUTH_MS = 60;                   // held this long, so one noisy frame cannot click
+const MOUTH_BACK_MS = 150;             // click where the cursor was just before the mouth opened
+const mouth = { since: null, fired: false };
+function detectMouthClick(f) {
+  if ((f.scores.jawOpen || 0) <= MOUTH_OPEN) { mouth.since = null; mouth.fired = false; return; }
+  if (mouth.since == null) mouth.since = f.t;
+  if (!mouth.fired && f.t - mouth.since >= MOUTH_MS) { mouth.fired = true; if (!grok.busy) clickAtRest("mouth", MOUTH_BACK_MS); }
 }
 // Two quick shakes the same way: next app (right) or previous app (left).
 const shake = { rest: null, state: "rest", since: 0, peak: 0, last: null };
@@ -656,7 +696,7 @@ setInterval(async () => {
 // the cursor while Grok works. A nod answers yes, a shake answers no, or stops Grok if it asked nothing.
 const grok = { busy: false, confirm: null };
 const dockHint = (text) => { const h = document.querySelector("#dock .hint"); if (h) h.textContent = text; };
-const DOCK_IDLE = "nod to click · shake twice to switch apps";
+const DOCK_IDLE = "open your mouth to click · shake twice to switch apps";
 const fakeAgent = { runs: [], run: async (goal) => { fakeAgent.runs.push(goal); await sleep(300); return { ok: true, steps: 1, summary: `sim: ${goal}`, routed: true, modelCalls: 0, totalMs: 300 }; } };
 window.fourLooks.agent = fakeAgent;
 function answerGrok(yes) {
@@ -678,17 +718,80 @@ out?.onAgent?.((ev) => {
   if (ev.type === "confirm") { grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod = yes. Shake = no.`); }
   else if (ev.type === "step") dockHint(ev.action === "thinking" ? "Grok is thinking." : `Grok: ${ev.reason || ev.action}`);
 });
+// Three quick blinks (or the eye icon) make Grok listen. The text box becomes the command line and the
+// send key becomes "do it". Nothing typed here goes to the app in front. Three blinks again cancels.
+const QUICK = ["open gmail", "help", "search for", "mouse mode", "calibrate"];      // shown bold first, then outward
+let grokMode = false, grokStash = "", grokFrom = "keyboard";
+const BLINK_MAX_MS = 450;              // longer than this is closing your eyes, not a blink
+const BLINK_SPAN_MS = 1800;            // three blinks inside this long
+const blink3 = { down: null, times: [] };
+function showBlinks(n) { [...document.querySelectorAll("#grokbtn .blinks i")].forEach((el, i) => el.classList.toggle("on", i < n)); }
+function detectTripleBlink(f, shut) {
+  if (blink3.times.length && f.t - blink3.times[blink3.times.length - 1] > BLINK_SPAN_MS) { blink3.times = []; showBlinks(0); }
+  if (shut) { if (blink3.down == null) blink3.down = f.t; return; }
+  if (blink3.down == null) return;
+  const len = f.t - blink3.down; blink3.down = null;
+  if (len > BLINK_MAX_MS) { blink3.times = []; showBlinks(0); return; }
+  blink3.times = [...blink3.times.filter((t) => f.t - t < BLINK_SPAN_MS), f.t];
+  showBlinks(blink3.times.length);
+  if (blink3.times.length >= 3) { blink3.times = []; setTimeout(() => showBlinks(0), 400); toggleGrokMode("three blinks"); }
+}
+async function enterGrokMode(why) {
+  if (grokMode || grok.busy || calibrating || !typer) return;
+  grokFrom = mode;
+  if (mode === "mouse") await setMode("keyboard", "grok");
+  toggleMenu(false);
+  typer.commitWord(); grokStash = typer.committed; typer.clear();      // what you were writing waits, untouched
+  grokMode = true;
+  document.body.classList.add("grokcmd");
+  record("grok-mode", { on: true, why });
+  tick();
+  prompt("Grok is listening. Type what you want done, then press do it. Three blinks to cancel.");
+  updateKeys(); renderText(); updatePrior();
+}
+function exitGrokMode() {
+  if (!grokMode) return;
+  grokMode = false;
+  document.body.classList.remove("grokcmd");
+  typer.clear(); typer.committed = grokStash; grokStash = "";
+  updateKeys(); renderText(); updatePrior();
+}
+function toggleGrokMode(why) {
+  if (grok.busy) { stopGrok(why); return; }
+  if (!grokMode) { enterGrokMode(why); return; }
+  exitGrokMode();
+  record("grok-mode", { on: false, why });
+  prompt("Grok cancelled.");
+  if (grokFrom === "mouse") setMode("mouse", "grok cancelled");
+}
+window.fourLooks.grokMode = () => grokMode;
+// Things the app does itself, at once, with no model: say them to Grok or pick them from the top row.
+const APP_COMMANDS = [
+  [/^(help|guide|what can (you|i) do)$/i, () => toggleHelp(true)],
+  [/^(re)?calibrate$/i, () => calibrate()],
+  [/^(mouse|mouse mode|use the mouse)$/i, () => setMode("mouse")],
+  [/^(next |change )?theme$/i, () => { runSetting("theme"); prompt(`Theme: ${theme}`); }],
+  [/^tune( to me)?$/i, () => startStudy("tune")],
+  [/^(hold|hold to press)$/i, () => { runSetting("hold"); prompt(`Hold to press is ${holdToPress ? "on" : "off"}.`); }],
+  [/^(quit|close four looks)$/i, () => out?.quit?.()],
+];
+function quickCommand(cmd) {
+  tick();
+  typer.clear(); typer.committed = /\bfor$/.test(cmd) ? `${cmd} ` : cmd;
+  if (/\bfor$/.test(cmd)) { updateKeys(); renderText(); updatePrior(); prompt("Now type what to search for, then press do it."); return; }
+  runGrok();
+}
 async function runGrok() {
-  const run = out?.agentRun || (params.get("sim") ? fakeAgent.run : null);
-  if (!run || !desk) { prompt("Grok control needs the desktop app."); return; }
   if (grok.busy) return;
   typer.commitWord();
   const goal = typer.text().trim();
-  if (!goal) { prompt("Type what you want done, then press grok. Try: open gmail"); return; }
-  // The sentence was typed live into the app in front. Take it back out: it was an instruction, not a message.
-  if (LIVE && mirrored.length) { const n = mirrored.length; mirrored = ""; queue = queue.then(() => out.edit(n, "")); await queue; }
-  typer.clear(); mirrored = "";
-  updateKeys(); renderText(); updatePrior();
+  if (!goal) { prompt("Type what you want done, then press do it. Or pick one on top."); return; }
+  const back = grokFrom;
+  const local = APP_COMMANDS.find(([re]) => re.test(goal.replace(/[.!?]+$/, "")));
+  if (local) { record("grok-local", { goal }); exitGrokMode(); local[1](); return; }
+  const run = out?.agentRun || (params.get("sim") ? fakeAgent.run : null);
+  if (!run || !desk) { prompt("Grok control needs the desktop app."); return; }
+  exitGrokMode();
   grok.busy = true; grok.confirm = null;
   record("grok", { goal });
   const t0 = performance.now();
@@ -704,9 +807,16 @@ async function runGrok() {
   record("grok-end", { ok: !!r.ok, sec: +sec, steps: r.steps ?? 0, modelCalls: r.modelCalls ?? null, routed: !!r.routed, why: r.stoppedWhy || "" });
   grok.busy = false; grok.confirm = null;
   document.body.classList.remove("grokmode");
-  dockHint(DOCK_IDLE);
-  await setMode("keyboard", "grok done");
-  prompt(r.ok ? `Grok, ${sec} s: ${r.summary || "done"}` : `Grok stopped: ${r.stoppedWhy || "no result"}`);
+  const said = r.ok ? `Grok, ${sec} s: ${r.summary || "done"}` : `Grok stopped: ${r.stoppedWhy || "no result"}`;
+  if (back === "mouse") {                       // it was woken from the dock: stay there and say the result there
+    await desk.mode("mouse");
+    dockHint(said);
+    setTimeout(() => { if (!grok.busy) dockHint(DOCK_IDLE); }, 5000);
+  } else {
+    dockHint(DOCK_IDLE);
+    await setMode("keyboard", "grok done");
+    prompt(said);
+  }
 }
 window.fourLooks.runGrok = runGrok;
 
@@ -749,6 +859,7 @@ function detectFlick(f) {
   if (f.t - flick.since > FLICK_MS) { flick.state = "rest"; flick.rest = x; return; }            // a real move
   if (Math.abs(flick.peak) >= FLICK_AMP && Math.abs(dx) < 0.35 * Math.abs(flick.peak)) {
     flick.state = "rest"; flick.last = f.t;
+    if (freshFix && f.t - freshFix.at < FIX_SHAKE_MS && keepFix("shake")) return;      // a shake right after an autocorrect says no to it
     const g = typer?.ghost();
     if (g && g.options > 1) { typer.nextGhost(); tick(); record("ghost-next", {}); renderText(); }
   }
@@ -769,6 +880,7 @@ function onFrame(f) {
   $("cuebar").style.setProperty("--c", String(c));
   if (adminOn && admin) drawAdmin(f, c);
   const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
+  if (f.face && !calibrating && !study.capture) detectTripleBlink(f, shut);
   if (shut && !calibrating) {
     if (eyesShutSince == null) { eyesShutSince = f.t; recentered = false; }
     else if (f.t - eyesShutSince > 3000) { eyesShutSince = null; toggleMenu(false); calibrate(); return; }
@@ -783,6 +895,7 @@ function onFrame(f) {
   const closing = freezeSince != null && f.t - freezeSince < FREEZE_MAX_MS;
   if (mode === "mouse") {
     if (!closing && !grok.busy) { const p = pointer.point(f.pose, f.t); if (p) driveMouse(p, f.t); }   // Grok has the cursor while it works
+    detectMouthClick(f);
     detectShake(f);
   } else if (!closing) {
     const p = pointer.point(f.pose, f.t);
@@ -1039,7 +1152,48 @@ function saveLog() {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = `four-looks-session-${Date.now()}.json`; a.click();
 }
+const HELP_KEY = "fourlooks.help.v1";
+const HELP_HTML = `<div class="help">
+  <section><h3>Type</h3><ul>
+    <li>Point your nose at a key.</li>
+    <li>Hold still on it to press. After half the hold the key locks.</li>
+    <li>The bold word on top is the best guess. Press it to take it.</li>
+    <li>Nod takes the grey word. Nod twice takes the phrase.</li>
+    <li>One quick shake shows the next guess.</li>
+  </ul></section>
+  <section><h3>Fix</h3><ul>
+    <li>Undo steps back. The arrow key deletes.</li>
+    <li>Eyes closed 1 second puts the cursor back in the middle.</li>
+    <li>Eyes closed 3 seconds calibrates again.</li>
+    <li>Fix asks Grok to check the sentence.</li>
+  </ul></section>
+  <section><h3>Grok</h3><ul>
+    <li>Blink three times. The eye lights up.</li>
+    <li>Type what you want, or pick one on top.</li>
+    <li>Press do it. Try: open gmail.</li>
+    <li>Nod is yes. Shake is no, or stop.</li>
+    <li>Also works: help, calibrate, mouse mode, theme, quit.</li>
+  </ul></section>
+  <section><h3>Mouse</h3><ul>
+    <li>Press mouse. Your head moves the real cursor.</li>
+    <li>Open your mouth quickly to click.</li>
+    <li>Shake twice the same way to switch apps.</li>
+    <li>The keyboard comes back in a text box.</li>
+    <li>Quit: the dots menu, or Control Option Q.</li>
+  </ul></section>
+</div>`;
+let helpOpen = false;
+function toggleHelp(open = !helpOpen) {
+  helpOpen = open;
+  buildMenu();
+  toggleMenu(open);
+  if (open) store(HELP_KEY, true);
+  record("help", { open });
+}
 const SETTINGS = [
+  { id: "help", label: "Help", value: () => "how it all works", run: () => toggleHelp(true) },
+  { id: "grok", label: "Grok", value: () => "or blink three times", run: () => { toggleMenu(false); enterGrokMode("menu"); } },
+  { id: "mouse", label: "Mouse mode", value: () => "head moves the cursor", run: () => { toggleMenu(false); setMode("mouse"); } },
   { id: "theme", label: "Theme", value: () => theme, run: () => { theme = cycle(THEMES, theme); store("fourlooks.theme.v1", theme); applyTheme(); } },
   { id: "cue", label: "Press with", value: () => CUES[cueCfg.cue].name, run: () => {
     cueCfg = { ...DEFAULT_CUE, cue: cycle(CUE_ORDER, cueCfg.cue) }; store(CUE_KEY, cueCfg);
@@ -1066,6 +1220,11 @@ if (window.fourLooksOut?.quit) {            // a plain close button, for the mou
   $("close").addEventListener("mousedown", (e) => { e.stopPropagation(); window.fourLooksOut.quit(); });
 }
 function buildMenu() {
+  $("menu").classList.toggle("helping", helpOpen);
+  if (helpOpen) {
+    $("menu").innerHTML = `${HELP_HTML}<div class="tile wide" data-key="set:helpclose" style="--i:0"><span class="name">Got it</span><span class="val">back to the keyboard</span></div>`;
+    return;
+  }
   $("menu").innerHTML = `<p class="hint">Eyes closed 1 second recentres the cursor. 3 seconds recalibrates.</p>` + SETTINGS.map((it, i) =>
     `<div class="tile" data-key="set:${it.id}" style="--i:${i}"><span class="name">${it.label}</span><span class="val"></span></div>`).join("");
   refreshMenu();
@@ -1082,11 +1241,13 @@ function refreshMenu() {
   }
 }
 function toggleMenu(open = !document.body.classList.contains("menu-open")) {
+  if (!open && helpOpen) { helpOpen = false; buildMenu(); }
   document.body.classList.toggle("menu-open", open);
   history.length = 0;                       // old hover votes belong to the other layer
   record("menu", { open });
 }
 function runSetting(id) {
+  if (id === "helpclose") { toggleHelp(false); return; }
   const it = SETTINGS.find((x) => x.id === id);
   if (!it) return;
   it.run();
@@ -1120,6 +1281,8 @@ setInterval(() => {                        // health report for checking the app
     const model = await (await fetch("/lm.json")).json();
     typer = new KeyTyper(new Decoder(model, { groups: LETTER_GROUPS }));
     typer.learn(loadWords());
+    try { typer.used = new Map(JSON.parse(localStorage.getItem(USED_KEY)) || []); } catch { /* start fresh */ }
+    usedSaved = typer.used.size;
     updatePrior();
     window.fourLooks.typer = typer;
     updateKeys(); renderText();

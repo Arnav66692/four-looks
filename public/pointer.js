@@ -1,6 +1,11 @@
 // Head pointer: head pose -> smoothed screen point. Per person: an affine map fitted from
 // the calibration dots, then a steady filter for tremor. The cursor is drawn where the head points.
 
+const EDGE_ZONE = 0.36;     // further than this from the middle of the screen the cursor turns calmer
+const EDGE_GAIN = 0.6;      // out there it moves this much for the same head move
+const EDGE_STEADY = 1.8;    // and ignores this much more tremor (head pose is noisier at big angles)
+const soften = (v) => { const d = v - 0.5, a = Math.abs(d); return a <= EDGE_ZONE ? v : 0.5 + Math.sign(d) * (EDGE_ZONE + (a - EDGE_ZONE) * EDGE_GAIN); };
+const edginess = (v) => Math.min(1, Math.max(0, (Math.abs(v - 0.5) - EDGE_ZONE) / (0.5 - EDGE_ZONE)));
 const MAX_STEP = 0.12;      // the most one camera frame may move the reading, in screen units
 // Look-ahead is off: on the simulated face with 120 ms camera delay it cut 50 ms of lag but more than
 // doubled overshoot (about 64 px against 23 px on a 300 px move). Add ?lead=1 to the address to try it.
@@ -134,11 +139,12 @@ export class HeadPointer {
   // Pose -> point in 0..1 screen units, smoothed and clamped.
   point(pose, t) {
     if (!this.ready || !pose) return null;
-    const raw = this.project(pose).map((v, k) => v + this.offset[k]);
+    const raw = this.project(pose).map((v, k) => soften(v + this.offset[k]));
     // The mapping never slides by itself. In a real session the old edge re-centering moved it about
     // 400 px sideways after one look away, which put some keys out of reach. Recenter is deliberate only.
     const clamp = (x) => Math.min(1, Math.max(0, x));
-    const f = [this.fx.filter(raw[0], this.steady), this.fy.filter(raw[1], this.steady)];
+    const calm = (k) => this.steady * (1 + (EDGE_STEADY - 1) * edginess(raw[k]));
+    const f = [this.fx.filter(raw[0], calm(0)), this.fy.filter(raw[1], calm(1))];
     // Look-ahead: while the head is clearly moving, draw the cursor a little ahead along its path.
     // A cursor that trails the head makes people turn too far and swing back.
     const dt = this.leadT ? Math.max((t - this.leadT) / 1000, 1e-3) : 0;
