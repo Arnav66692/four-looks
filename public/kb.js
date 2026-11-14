@@ -725,16 +725,28 @@ out?.onAgent?.((ev) => {
 // send key becomes "do it". Nothing typed here goes to the app in front. Three blinks again cancels.
 const QUICK = ["open gmail", "help", "search for", "mouse mode", "calibrate"];      // shown bold first, then outward
 let grokMode = false, grokStash = "", grokFrom = "keyboard";
-const BLINK_MAX_MS = 450;              // longer than this is closing your eyes, not a blink
-const BLINK_SPAN_MS = 1800;            // three blinks inside this long
-const blink3 = { down: null, times: [] };
+// A deliberate blink is a clear, short, full close of both eyes. In his 2:55 PM run Grok woke 0.7 s after the
+// camera started: a plain "eyelids past halfway" test also fires on tracking start-up and on looking down at
+// the lower keys, where the lids sit half closed. So the blink is measured against the resting lid level.
+const BLINK_RISE = 0.3;                // a blink closes at least this far past the resting lid level
+const BLINK_FLOOR = 0.45;              // and at least this far in absolute terms (his own blinks crossed 0.5 in the 2:55 PM run)
+const BLINK_MIN_MS = 60, BLINK_MAX_MS = 400;   // shorter is noise, longer is closing your eyes (that recentres)
+const BLINK_SPAN_MS = 1500;            // three blinks inside this long
+const BLINK_WARMUP_MS = 4000;          // nothing counts until the face has been tracked this long
+const blink3 = { base: 0.1, down: null, times: [], faceSince: null };
 function showBlinks(n) { [...document.querySelectorAll("#grokbtn .blinks i")].forEach((el, i) => el.classList.toggle("on", i < n)); }
-function detectTripleBlink(f, shut) {
+function detectTripleBlink(f) {
+  if (blink3.faceSince == null) blink3.faceSince = f.t;
+  const v = ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2;
   if (blink3.times.length && f.t - blink3.times[blink3.times.length - 1] > BLINK_SPAN_MS) { blink3.times = []; showBlinks(0); }
-  if (shut) { if (blink3.down == null) blink3.down = f.t; return; }
-  if (blink3.down == null) return;
+  if (blink3.down == null) {
+    if (v > Math.max(BLINK_FLOOR, blink3.base + BLINK_RISE)) blink3.down = f.t;
+    else blink3.base += 0.04 * (v - blink3.base);          // the resting lid level follows slowly, so looking down does not count
+    return;
+  }
+  if (v > blink3.base + 0.15) { if (f.t - blink3.down > BLINK_MAX_MS) { blink3.times = []; showBlinks(0); } return; }   // still closed
   const len = f.t - blink3.down; blink3.down = null;
-  if (len > BLINK_MAX_MS) { blink3.times = []; showBlinks(0); return; }
+  if (len < BLINK_MIN_MS || len > BLINK_MAX_MS || f.t - blink3.faceSince < BLINK_WARMUP_MS) { blink3.times = []; showBlinks(0); return; }
   blink3.times = [...blink3.times.filter((t) => f.t - t < BLINK_SPAN_MS), f.t];
   showBlinks(blink3.times.length);
   if (blink3.times.length >= 3) { blink3.times = []; setTimeout(() => showBlinks(0), 400); toggleGrokMode("three blinks"); }
@@ -898,7 +910,8 @@ function onFrame(f) {
   $("cuebar").style.setProperty("--c", String(c));
   if (adminOn && admin) drawAdmin(f, c);
   const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
-  if (f.face && !calibrating && !study.capture) detectTripleBlink(f, shut);
+  if (f.face && !calibrating && !study.capture) detectTripleBlink(f);
+  else { blink3.down = null; blink3.times = []; if (!f.face) blink3.faceSince = null; }
   if (shut && !calibrating) {
     if (eyesShutSince == null) { eyesShutSince = f.t; recentered = false; }
     else if (f.t - eyesShutSince > 3000) { eyesShutSince = null; toggleMenu(false); calibrate(); return; }
