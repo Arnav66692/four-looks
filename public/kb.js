@@ -580,9 +580,9 @@ async function calibrate() {
       dot.style.display = "block";
       dot.style.left = `${tx * innerWidth}px`;
       dot.style.top = `${ty * innerHeight}px`;
-      prompt(attempt === 1 ? "Point your nose at the dot. Keep it comfortable." : "That did not line up. Follow each dot with your nose.", true);
-      await sleep(1200);
-      const pose = await collectPose(700);
+      prompt(attempt === 1 ? "Point your nose at the dot. Keep it comfortable." : "Once more. Turn your head a bit further toward each dot.", true);
+      await sleep(700);
+      const pose = await collectSettledPose();
       if (pose) { poses.push(pose); used.push([tx, ty]); }
     }
     dot.style.display = "none";
@@ -593,16 +593,34 @@ async function calibrate() {
     const deg = (r) => +((r * 180) / Math.PI).toFixed(1);
     const yaws = poses.map((p) => p[0]), pitches = poses.map((p) => p[1]);
     record("calibrate", { attempt, points: poses.length, missScreen: +miss.toFixed(3), turnDeg: deg(Math.max(...yaws) - Math.min(...yaws)), nodDeg: deg(Math.max(...pitches) - Math.min(...pitches)) });
-    if (miss < 0.12) {
+    // The line-up number is recorded for study, never used to refuse. Only a head that barely moved gets one more try.
+    const barelyMoved = Math.max(...yaws) - Math.min(...yaws) < 0.09 || Math.max(...pitches) - Math.min(...pitches) < 0.045;
+    if (!barelyMoved || attempt === 2) {
       store(POINTER_KEY, pointer);
       calibrating = false;
       await calibrateCue();
       return;
     }
-    pointer.map = null;
   }
-  prompt("Calibration did not line up. Open the menu and choose Calibrate to try again.");
+  prompt("Could not see your face for calibration. It will try again when it sees you.");
   calibrating = false;
+}
+
+// Waits until the head has settled on the dot (or 2 seconds pass), then averages the next 0.7 seconds.
+async function collectSettledPose() {
+  const recent = [];
+  const w = (f) => { if (f.pose) { recent.push({ t: f.t, p: f.pose }); if (recent.length > 60) recent.shift(); } };
+  watchers.add(w);
+  const t0 = performance.now();
+  while (performance.now() - t0 < 2000) {
+    await sleep(100);
+    const last = recent.filter((r) => performance.now() - r.t < 400);
+    if (last.length < 6) continue;
+    const spread = (k) => Math.max(...last.map((r) => r.p[k])) - Math.min(...last.map((r) => r.p[k]));
+    if (spread(0) < 0.02 && spread(1) < 0.02) break;            // within about one degree for 0.4 s
+  }
+  watchers.delete(w);
+  return collectPose(700);
 }
 
 async function collectCue(ms) {
