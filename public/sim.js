@@ -30,22 +30,36 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     const drift = level.smile > 0.3 ? 0.004 : 0;          // the head shifts a little during a smile
     // Slouching: once typing starts, the whole head slowly settles down and to one side.
     const bias = DRIFT && driftStart != null ? (DRIFT * (performance.now() - driftStart)) / 60000 : 0;
-    const pose = [(0.5 - head.x) * POSE_X + 0.6 * bias + JITTER * gauss(), (head.y + dip - 0.5) * POSE_Y + drift + bias + JITTER * gauss()];
+    const pose = [(0.5 - head.x) * POSE_X + 0.6 * bias + JITTER * gauss(), (0.5 - head.y - dip) * POSE_Y - drift - bias + JITTER * gauss()];
     onFrame({ t: performance.now(), head: [0, 0], pose, scores, face: true });
   }, HZ);
 
   // What a person does without being told: look at the dot, do the move when asked.
-  let lastPrompt = "";
+  let lastPrompt = "", steering = false;
   function follow() {
     const dot = document.getElementById("target");
     if (dot && dot.style.display === "block") {
       const tx = parseFloat(dot.style.left) / innerWidth, ty = parseFloat(dot.style.top) / innerHeight;
       head.x += 0.25 * (tx - head.x); head.y += 0.25 * (ty - head.y);
     }
+    const box = document.getElementById("studybox");                 // the guided test's target box
+    if (box && box.style.display === "block" && !steering) {
+      const r = box.getBoundingClientRect(), c = window.fourLooks.cursor && window.fourLooks.cursor();
+      const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1;
+      if (c) { head.x += (0.12 * ((r.left + r.width / 2) - c[0])) / innerWidth / g; head.y += (0.12 * ((r.top + r.height / 2) - c[1])) / innerHeight / g; }
+    }
     const p = document.getElementById("prompt");
-    const text = p && p.classList.contains("big") ? p.textContent : "";
+    const big = p && p.classList.contains("big");
+    const text = p ? p.textContent : "";
     if (text !== lastPrompt) {
       lastPrompt = text;
+      const turn = big && text.match(/Turn (left|right|up|down) as far/);
+      if (turn) { const to = { left: [0.05, head.y], right: [0.95, head.y], up: [head.x, 0.05], down: [head.x, 0.95] }[turn[1]]; lookAt(to[0], to[1], 500); }
+      if (big && /Back to the middle|hold still/.test(text)) lookAt(0.5, 0.6, 400);
+      if (big && /^Nod now/.test(text)) nod();
+      const typeIt = !big && text.match(/Type: (.+)$/);
+      if (typeIt) { steering = true; type(typeIt[1] + " ").finally(() => { steering = false; }); }
+      if (!big) return;
       if (/ now\.$/.test(text) && !/normally|relax/i.test(text)) cue(cueName(), 520);
       if (/talk a little|look around|blink normally/i.test(text)) chatter();
     }
@@ -64,7 +78,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   }
   // Like a person: glance toward the key, then watch the cursor and steer until it sits on the key.
   async function lookAtKey(key, miss = 0.12) {
-    const el = [...document.querySelectorAll("[data-key]")].find((e) => e.dataset.key === key || e.dataset.word === key);
+    const el = findKey(key);
     if (!el) throw new Error(`no key ${key}`);
     const r = el.getBoundingClientRect();
     const tx = (r.left + r.width / 2 + miss * r.width * gauss()) / innerWidth, ty = (r.top + r.height / 2 + miss * r.height * gauss()) / innerHeight;
@@ -95,7 +109,11 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   async function rowHop() { const y0 = head.y; await lookAt(head.x, y0 + 0.17, 160); await lookAt(head.x, y0, 160); await sleep(300); }
   // A person only does the press move once the key they want is highlighted.
   const tally = { presses: 0, reAims: 0, gaveUp: 0, wrongKey: 0 };
-  const findKey = (key) => [...document.querySelectorAll("[data-key]")].find((e) => e.dataset.key === key || e.dataset.word === key);
+  const findKey = (key) => {
+    const all = [...document.querySelectorAll("[data-key]")];
+    return all.find((e) => e.dataset.key === key || e.dataset.word === key)
+      || (key.length === 1 ? all.find((e) => e.dataset.key.startsWith("g:") && e.dataset.key.slice(2).includes(key)) : undefined);   // big keys hold several letters
+  };
   async function press(key) {
     if (driftStart == null) driftStart = performance.now();
     let aimed = false;
@@ -114,7 +132,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     const got = window.fourLooks.log.slice(n0).find((e) => ["letter", "space", "symbol", "backspace", "undo", "setting", "pick", "speak", "menu"].includes(e.type));
     const want = key === "space" ? "space" : key.startsWith("set:") ? key.slice(4) : key;
     const gotKey = got ? (got.key || got.id || got.type) : "(nothing)";
-    if (aimed && !(gotKey === want || got?.type === want || (key === "menu" && got?.type === "menu"))) { tally.wrongKey++; (tally.misses ||= []).push(`${key}->${gotKey}`); }
+    if (aimed && !(gotKey === want || (String(gotKey).startsWith("g:") && String(gotKey).includes(key)) || got?.type === want || (key === "menu" && got?.type === "menu"))) { tally.wrongKey++; (tally.misses ||= []).push(`${key}->${gotKey}`); }
   }
   async function type(text) {
     for (const ch of text) await press(ch === " " ? "space" : ch);

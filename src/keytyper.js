@@ -37,9 +37,10 @@ export class KeyTyper {
 
   learn(words) { for (const w of words) if (/^[a-z']+$/i.test(w)) this.learned.add(w.toLowerCase()); }
 
-  letter(probs) {
+  // group: the press came from a big key holding several letters, so the letters themselves are unknown.
+  letter(probs, { group = false } = {}) {
     const char = LETTERS[probs.indexOf(Math.max(...probs))];
-    this.pending = [...this.pending, { probs, char, upper: this.shift !== "off" }];
+    this.pending = [...this.pending, { probs, char, upper: this.shift !== "off", group }];
     if (this.shift === "once") this.shift = "off";
   }
 
@@ -78,6 +79,12 @@ export class KeyTyper {
   }
 
   typedWord() { return this.pending.map((p) => p.char).join(""); }
+  groupMode() { return this.pending.some((p) => p.group); }
+  // What to show for the word in progress: the letters as typed, or with big keys the best guess so far.
+  typingDisplay() {
+    if (!this.pending.length) return "";
+    return this.groupMode() ? this.bestWord() : this.exactCase(this.typedWord());
+  }
   letterSlots() { return this.pending.filter((p) => p.probs); }
 
   // Case the person typed on purpose: mixed case or all caps is kept exactly.
@@ -128,7 +135,7 @@ export class KeyTyper {
       cands.push({ word: w, score: sc, learned: true });
     }
     const typedIsWord = this.dec.idOf(typed.toLowerCase()) >= 0 || this.learned.has(typed.toLowerCase());
-    if (!typedIsWord) cands.push({ word: typed.toLowerCase(), score: this.typedScore(), typed: true });
+    if (!typedIsWord && !this.groupMode()) cands.push({ word: typed.toLowerCase(), score: this.typedScore(), typed: true });
     cands.sort((a, b) => b.score - a.score);
     const seen = new Set();
     return cands.filter((c) => !seen.has(c.word) && seen.add(c.word)).slice(0, n);
@@ -138,6 +145,10 @@ export class KeyTyper {
   bestWord() {
     if (!this.pending.length) return "";
     const typed = this.typedWord();
+    if (this.groupMode()) {
+      const best = this.ranked(1)[0] || this.dec.completeWord(this.letterSlots().map((p) => p.probs), this.history(), { top: 1 })[0];
+      return best ? this.caseLike(best.word) : "";
+    }
     if (this.raw || this.deliberateCase() || !this.letterSlots().length) return this.exactCase(typed);
     const top = this.ranked(1)[0];
     return top.typed ? this.exactCase(typed) : this.caseLike(top.word);
@@ -159,6 +170,8 @@ export class KeyTyper {
     const longer = this.completions(2);
     const others = this.raw ? [] : this.ranked(3).map((c) => (c.typed ? typed : this.caseLike(c.word)));
     // Best same-length word, the two likeliest longer words, then other same-length guesses and the exact letters.
+    // Big keys: the best same-length word, then the likeliest longer word, then the rest.
+    if (this.groupMode()) return [...new Set([best, longer[0], ...others, longer[1]])].filter(Boolean).slice(0, n + 2);
     const order = [best, ...longer, ...others, typed];
     const out = [...new Set(order)].slice(0, n + 1);
     if (!out.includes(typed) && typed !== best) out[out.length - 1] = typed;
@@ -168,7 +181,7 @@ export class KeyTyper {
   commitWord() {
     if (!this.pending.length) return;
     const typed = this.exactCase(this.typedWord()), best = this.bestWord();
-    this.lastFix = best !== typed ? { from: typed, to: best } : null;
+    this.lastFix = best !== typed && !this.groupMode() ? { from: typed, to: best } : null;
     this.committed += best;
     this.pending = [];
   }
@@ -176,7 +189,7 @@ export class KeyTyper {
   // Longer words that start with what is typed so far.
   completions(n = 2) {
     const slots = this.letterSlots();
-    if (!slots.length || this.raw || this.deliberateCase()) return [];
+    if (!slots.length || ((this.raw || this.deliberateCase()) && !this.groupMode())) return [];
     return this.dec.completeWord(slots.map((p) => p.probs), this.history(), { top: n }).map((c) => this.caseLike(c.word));
   }
 
@@ -184,7 +197,10 @@ export class KeyTyper {
   ghost() {
     if (this.pending.length) {
       const c = this.completions(1)[0];
-      return c ? { word: c, tail: c.slice(this.typedWord().length) } : null;
+      if (!c) return null;
+      const shown = this.typingDisplay();
+      // Only offer grey text that continues what is on screen.
+      return c.toLowerCase().startsWith(shown.toLowerCase()) ? { word: c, tail: c.slice(shown.length) } : null;
     }
     if (!this.committed || !/\s$/.test(this.committed)) return null;
     const next = this.suggestions(1)[0];
@@ -207,5 +223,5 @@ export class KeyTyper {
     if (this.shift === "once") this.shift = "off";
   }
 
-  text() { return this.committed + this.exactCase(this.typedWord()); }
+  text() { return this.committed + this.typingDisplay(); }
 }

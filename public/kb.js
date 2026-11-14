@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const DWELL = Number(params.get("dwell") || 1000);     // ms on a key to press it
 const CUE_KEY = "fourlooks.cue.v1";                     // which face move presses, with its per-person line and length
-const REACH_KEY = "fourlooks.reach.v1";
+const REACH_KEY = "fourlooks.reach.v2";
 const REACH_STEPS = [1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
 const STICKY = 0.2;                                     // margin (in key sizes) a fresh hover keeps
@@ -24,8 +24,9 @@ const NOD_AMP = Number(params.get("nod") || 0.3);        // a nod dips at least 
 const NOD_START = 0.07;                                 // a dip this big starts the nod clock
 const NOD_MS = 550;                                     // and the head is back within this long
 const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
-const CHIP_SLOTS = 4;
-const POINTER_KEY = "fourlooks.pointer.v1";
+const CHIP_SLOTS = 5;
+const CHIP_ORDER = [3, 1, 0, 2, 4];     // slot -> guess rank: the best guess sits in the middle of the row
+const POINTER_KEY = "fourlooks.pointer.v2";      // v2: one-step centring with a fixed comfortable range
 const HOLD_KEY = "fourlooks.hold.v1";
 const WORDS_KEY = "fourlooks.words.v1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -35,7 +36,17 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "menu", "space", "undo", "fix", "speak"],
+    ["123", "layout", "menu", "space", "undo", "fix", "speak"],
+  ],
+  // Built around where the head rests, not where hands rest. Share of English letters by key:
+  // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
+  // middle. Turning is easier than nodding, so the next two sit left and right. Space, the most pressed
+  // key of all, is straight below. The rare keys take the top corners.
+  big: [
+    ["⌫", "g:jkl", "g:pqrs", "g:wxyz", "send"],
+    ["undo", "g:mno", "g:def", "g:ghi", "speak"],
+    ["123", "g:tuv", "space", "g:abc", "menu"],
+    ["shift", ",", ".", "?", "'", "fix", "layout"],
   ],
   sym: [
     [..."1234567890", "⌫"],
@@ -44,7 +55,7 @@ const LAYOUTS = {
     ["abc", "menu", "space", "undo", "fix", "speak"],
   ],
 };
-const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu"]);
+const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu", "layout"]);
 const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const ICONS = {
   "⌫": svg('<path d="M9 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-6-6z"/><path d="M12.5 10l4 4m0-4l-4 4"/>'),
@@ -56,10 +67,20 @@ const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": 
 
 const log = [];
 const record = (type, extra = {}) => log.push({ t: Date.now(), type, ...extra });
+const SESSION = `${new Date().toISOString().replace(/[:.]/g, "-")}`;
+let logSent = 0;
+setInterval(() => {                        // every session is saved on this computer, so real use can be studied
+  if (logSent >= log.length) return;
+  const batch = log.slice(logSent);
+  logSent = log.length;
+  fetch("/api/log", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: SESSION, events: batch }) }).catch(() => { logSent -= batch.length; });
+}, 3000);
 window.fourLooks = { log };
 
 let typer = null;
-let layer = "abc";
+const LAYOUT_KEY = "fourlooks.layout.v1";
+let letters = (() => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) === "abc" ? "abc" : "big"; } catch { return "big"; } })();   // big keys by default
+let layer = letters;
 let pointer = loadPointer();
 let letterCenters = [];
 let keyWidth = 60;
@@ -75,7 +96,7 @@ function loadPointer() {
 }
 function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
 function loadCue() { try { const o = JSON.parse(localStorage.getItem(CUE_KEY)); return o && CUES[o.cue] ? { ...DEFAULT_CUE, ...o } : { ...DEFAULT_CUE }; } catch { return { ...DEFAULT_CUE }; } }
-function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH_KEY))) || 1.3; } catch { return 1.3; } }
+function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH_KEY))) || 1; } catch { return 1; } }
 function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 let promptTimer = 0;
@@ -109,16 +130,18 @@ function tick() {
 // ---------- rendering: build once per layer, then update in place ----------
 function buildKeys() {
   $("keys").innerHTML = LAYOUTS[layer].map((row) => `<div class="row">${row.map((k) => {
-    const cls = ["key", FN.has(k) ? "fn" : "", k === "space" ? "space" : "", k === "send" ? "send" : ""].join(" ").trim();
+    const cls = ["key", FN.has(k) ? "fn" : "", k === "space" ? "space" : "", k === "send" ? "send" : "", k.startsWith("g:") ? "group" : ""].join(" ").trim();
     return `<div class="${cls}" data-key="${k === "\"" ? "&quot;" : k}"><span class="cap"><span class="label"></span></span></div>`;
   }).join("")}</div>`).join("");
-  $("chips").innerHTML = Array.from({ length: CHIP_SLOTS }, () => `<div data-key="pick" class="empty"></div>`).join("");
+  const chips = $("chips");
+  if (!chips.children.length) chips.innerHTML = Array.from({ length: CHIP_SLOTS }, () => `<div data-key="pick" class="empty"></div>`).join("");
+  document.body.classList.toggle("centred", layer === "big");
   updateKeys();
   measure();
 }
 function updateKeys() {
   const upper = typer && typer.shift !== "off";
-  document.querySelectorAll("#keys [data-key]").forEach((el) => {
+  document.querySelectorAll("#keys .key[data-key]").forEach((el) => {
     const k = el.dataset.key;
     const isLetter = k.length === 1 && /[a-z]/.test(k);
     const label = el.querySelector(".label");
@@ -126,27 +149,29 @@ function updateKeys() {
       el.classList.toggle("on", upper);
       label.innerHTML = typer?.shift === "lock" ? ICONS.caps : ICONS.shift;
     } else if (ICONS[k]) { if (!label.firstChild) label.innerHTML = ICONS[k]; }
+    else if (k.startsWith("g:")) label.textContent = [...k.slice(2)].join(" ").toUpperCase();
+    else if (k === "layout") label.textContent = letters === "big" ? "qwerty" : "big keys";
     else label.textContent = isLetter ? k.toUpperCase() : (FACE[k] ?? k);
   });
 }
 function measure() {
-  letterCenters = [...document.querySelectorAll("#keys [data-key]")]
+  letterCenters = [...document.querySelectorAll("#keys .key[data-key]")]
     .filter((el) => el.dataset.key.length === 1 && LETTERS.includes(el.dataset.key))
     .map((el) => { const r = el.getBoundingClientRect(); keyWidth = r.width; return { letter: el.dataset.key, x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
 }
 function renderText() {
   if (!typer) return;
   $("done").textContent = typer.committed;
-  $("typing").textContent = typer.pending.length ? typer.exactCase(typer.typedWord()) : "";
+  $("typing").textContent = typer.typingDisplay();
   const g = typer.ghost();
   $("ghost").textContent = g ? g.tail : "";
   $("textbox").classList.toggle("empty", !typer.text());
   $("textbox").scrollTop = $("textbox").scrollHeight;
   const sugg = typer.suggestions(3);
   [...$("chips").children].forEach((el, i) => {
-    const w = sugg[i];
+    const w = sugg[CHIP_ORDER[i]];
     el.classList.toggle("empty", !w);
-    el.classList.toggle("lead", i === 0 && !!w);
+    el.classList.toggle("lead", CHIP_ORDER[i] === 0 && !!w);
     el.dataset.word = w || "";
     el.textContent = w || "";
   });
@@ -200,6 +225,7 @@ function noteFix() {
 }
 
 function acceptGhost(how) {
+  if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
   if (!typer.ghost()) return false;
@@ -215,6 +241,8 @@ function acceptGhost(how) {
 
 // ---------- Grok check: grammar and sense, through the local server (needs XAI_API_KEY in .env) ----------
 window.fourLooks.offset = () => pointer.offset;
+// The guided test borrows the pointer, the press move and the nod while it runs.
+const study = { capture: false, onPress: null, onNod: null, watchers: new Set() };
 let pendingFix = null;
 let lastPress = null;                  // top letters of the last key press, for the admin view
 async function askFix() {
@@ -252,7 +280,7 @@ function press(el, x, y) {
   if (k === "menu") { toggleMenu(); return; }
   if (k.startsWith("set:")) { runSetting(k.slice(4)); return; }
   const before = typer.text().length;
-  const edits = !["shift", "123", "abc", "speak", "undo", "fix"].includes(k);
+  const edits = !["shift", "123", "abc", "layout", "speak", "undo", "fix"].includes(k);
   if (edits) typer.save();
   if (k === "undo") {
     if (pendingFix) { pendingFix = null; prompt("Dismissed."); }
@@ -263,6 +291,11 @@ function press(el, x, y) {
     typer.pick(el.dataset.word);
     store(WORDS_KEY, [...typer.learned]);
     record("pick", { word: el.dataset.word });
+  } else if (k.startsWith("g:")) {                    // a big key: the press only says "one of these letters"
+    const group = k.slice(2);
+    typer.letter([...LETTERS].map((c) => (group.includes(c) ? 1 / group.length : 0)), { group: true });
+    lastPress = [...group].map((c) => [c, 1 / group.length]);
+    record("letter", { key: k });
   } else if (k.length === 1 && LETTERS.includes(k)) {
     const probs = letterProbs(x, y);
     lastPress = probs.map((p, i) => [LETTERS[i], p]).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -271,7 +304,8 @@ function press(el, x, y) {
   } else if (k === "space") { typer.literal(" "); record("space"); }
   else if (k === "⌫") { typer.backspace(); record("backspace"); }
   else if (k === "shift") typer.toggleShift();
-  else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : "abc"; buildKeys(); }
+  else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : letters; buildKeys(); }
+  else if (k === "layout") { letters = letters === "big" ? "abc" : "big"; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); }
   else if (k === "speak") speak(false);
   else if (k === "send") send();
   else { typer.literal(k); record("symbol", { key: k }); }
@@ -352,13 +386,13 @@ function updatePrior() {
   const z = w.reduce((a, b) => a + b, 0);
   letterPrior = z > 0 ? w.map((v) => v / z) : null;
   const peak = letterPrior ? Math.max(...letterPrior) : 0;
-  document.querySelectorAll("#keys [data-key]").forEach((el) => {      // admin view tints keys by how likely they are next
+  document.querySelectorAll("#keys .key[data-key]").forEach((el) => {      // admin view tints keys by how likely they are next
     const i = el.dataset.key.length === 1 ? LETTERS.indexOf(el.dataset.key) : -1;
     el.style.setProperty("--prior", i >= 0 && peak > 0 ? String(letterPrior[i] / peak) : "0");
   });
 }
 
-const letterEls = () => document.querySelectorAll("#keys [data-key]");
+const letterEls = () => document.querySelectorAll("#keys .key[data-key]");
 function keyAt(x, y) {
   const hit = document.elementFromPoint(x, y)?.closest("[data-key]") || null;
   const onLetters = !hit || (hit.dataset.key.length === 1 && LETTERS.includes(hit.dataset.key));
@@ -429,7 +463,7 @@ function movePointer(x, y, t) {
     el?.classList.add("hover");
   }
   let progress = 0;
-  if (hoverEl && armed && !calibrating && holdToPress) {
+  if (hoverEl && armed && !calibrating && holdToPress && !study.capture) {
     progress = Math.min(1, (t - hoverSince) / DWELL);
     if (progress >= 1) {
       press(hoverEl, x, y);
@@ -492,9 +526,11 @@ function onFrame(f) {
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
   detectNod(f);
+  study.watchers.forEach((w) => w(f, { cursor: cursorAt, score: c }));
   if (c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
     const target = intended(blinkSince);       // where you were when the press move started
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms && study.capture) { blinkFired = true; study.onPress?.(performance.now()); }
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && target) {
       blinkFired = true;
       // For studying drift on a real face: where the head was in the camera frame at this press.
@@ -520,27 +556,23 @@ async function calibrate() {
   if (!lastFrame) { prompt("Start the camera first."); return; }
   calibrating = true;
   $("cursor").style.display = "none";
-  const targets = [[0.5, 0.5], [0.08, 0.1], [0.92, 0.1], [0.92, 0.9], [0.08, 0.9], [0.5, 0.5]];
-  const poses = [], used = [];
-  for (const [tx, ty] of targets) {
-    const dot = $("target");
-    dot.style.display = "block";
-    dot.style.left = `${tx * innerWidth}px`;
-    dot.style.top = `${ty * innerHeight}px`;
-    prompt("Turn your head a little toward the dot. Keep it comfortable.", true);
-    await sleep(1100);
-    const pose = await collectPose(700);
-    if (pose) { poses.push(pose); used.push([tx, ty]); }
-  }
-  $("target").style.display = "none";
-  if (poses.length >= 4) {
-    pointer.fit(poses, used);
+  // One step: face the middle of the keyboard. That pose becomes the centre, with a fixed comfortable range.
+  const k = $("keys").getBoundingClientRect();
+  const tx = (k.left + k.width / 2) / innerWidth, ty = (k.top + k.height / 2) / innerHeight;
+  const dot = $("target");
+  dot.style.display = "block"; dot.style.left = `${tx * innerWidth}px`; dot.style.top = `${ty * innerHeight}px`;
+  prompt("Sit comfortably, face the dot and hold still.", true);
+  await sleep(1400);
+  const pose = await collectPose(900);
+  dot.style.display = "none";
+  if (pose && pointer.center(pose, tx, ty)) {
     store(POINTER_KEY, pointer);
-    record("calibrate", { points: poses.length });
+    record("calibrate", { pose: pose.map((v) => +v.toFixed(4)) });
     calibrating = false;
     await calibrateCue();
     return;
-  } else prompt("Lost your face during calibration. Add light and try again.");
+  }
+  prompt("Lost your face during calibration. Add light and try again.");
   calibrating = false;
 }
 
@@ -612,7 +644,7 @@ function applyTheme() {
   requestAnimationFrame(measure);
 }
 applyTheme();
-pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1.3;
+pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1;
 // ---------- camera view and admin view ----------
 const flag = (key, fallback) => { try { const v = JSON.parse(localStorage.getItem(key)); return typeof v === "boolean" ? v : fallback; } catch { return fallback; } };
 let camView = flag("fourlooks.camview.v1", true);
@@ -645,6 +677,33 @@ function drawAdmin(f, c) {
 }
 applyViews();
 
+let studyRunning = false;
+async function startStudy() {
+  if (studyRunning || !usingCamera || !pointer.ready) { prompt("Start the camera and calibrate first."); return; }
+  studyRunning = true;
+  const { runStudy } = await import("./study.js");
+  const box = $("studybox");
+  try {
+    await runStudy({
+      prompt, record, cursor: () => cursorAt, pressNow: () => CUES[cueCfg.cue].firm,
+      onFrame: (fn) => { study.watchers.add(fn); return () => study.watchers.delete(fn); },
+      capture: (on, onPress = null, onNod = null) => { study.capture = on; study.onPress = onPress; study.onNod = onNod; },
+      target: {
+        show: (cx, cy, w, h) => { Object.assign(box.style, { display: "block", left: `${cx - w / 2}px`, top: `${cy - h / 2}px`, width: `${w}px`, height: `${h}px` }); },
+        hide: () => { box.style.display = "none"; },
+      },
+      typing: { text: () => typer.text(), clear: () => { typer.clear(); mirrored = ""; updateKeys(); renderText(); updatePrior(); } },
+      layout: { get: () => letters, set: (v) => { letters = v; layer = v; buildKeys(); renderText(); } },
+    });
+  } finally { study.capture = false; box.style.display = "none"; studyRunning = false; }
+}
+window.fourLooks.startStudy = startStudy;
+if (params.get("study") === "1") {           // started with "npm run study": begin once the camera and both calibrations are ready
+  const wait = setInterval(() => {
+    if (usingCamera && pointer.ready && cueCfg.calibrated && !calibrating) { clearInterval(wait); setTimeout(startStudy, 1500); }
+  }, 1000);
+}
+
 const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
 function saveLog() {
   const blob = new Blob([JSON.stringify({ metrics: metrics(), log }, null, 2)], { type: "application/json" });
@@ -661,6 +720,7 @@ const SETTINGS = [
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
   { id: "admin", label: "Admin view", value: () => (adminOn ? "on" : "off"), run: () => { adminOn = !adminOn; store("fourlooks.admin.v1", adminOn); applyViews(); } },
+  { id: "study", label: "Run the test", value: () => "3 minutes", run: () => { toggleMenu(false); startStudy(); } },
   { id: "calibrate", label: "Calibrate", value: () => "pointer, then press move", run: () => { toggleMenu(false); calibrate(); } },
   { id: "camera", label: "Camera", value: () => (usingCamera ? "on" : "off"), run: () => startCamera() },
   { id: "clear", label: "Clear text", value: () => "", run: () => { typer.save(); typer.clear(); mirrored = ""; record("clear"); renderText(); updatePrior(); } },

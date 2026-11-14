@@ -2,7 +2,7 @@
 // Secrets come from .env (never committed, never sent to the page).
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -85,10 +85,10 @@ async function grokFix(text) {
   return out ? { ok: true, text: out, model, spentUsd: +spent.usd.toFixed(4) } : { ok: false, error: "empty reply" };
 }
 
-function readBody(req) {
+function readBody(req, max = 10000) {
   return new Promise((resolve, reject) => {
     let data = "";
-    req.on("data", (c) => { data += c; if (data.length > 10000) { reject(new Error("too large")); req.destroy(); } });
+    req.on("data", (c) => { data += c; if (data.length > max) { reject(new Error("too large")); req.destroy(); } });
     req.on("end", () => resolve(data));
     req.on("error", reject);
   });
@@ -112,6 +112,17 @@ createServer(async (req, res) => {
     } else {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(lastStatus ? { ...lastStatus, ageMs: Date.now() - lastStatus.at } : { none: true }));
     }
+    return;
+  }
+  if (url === "/api/log" && req.method === "POST") {          // session events, appended to data/sessions/<session>.jsonl
+    try {
+      const { session, events } = JSON.parse(await readBody(req, 400000));
+      if (/^[0-9TZ-]{10,40}$/.test(session) && Array.isArray(events)) {
+        mkdirSync(join(ROOT, "data", "sessions"), { recursive: true });
+        appendFileSync(join(ROOT, "data", "sessions", `${session}.jsonl`), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+      }
+    } catch { /* drop a bad batch */ }
+    res.writeHead(204).end();
     return;
   }
   if (url === "/api/usage") {

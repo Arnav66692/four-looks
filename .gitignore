@@ -6,3 +6,4 @@ public/lm.json
 native/bin/
 native/.build/
 .usage.json
+data/sessions/

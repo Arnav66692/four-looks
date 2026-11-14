@@ -65,6 +65,16 @@ export class HeadPointer {
   // poses: head pose samples (means). targets: matching points in 0..1 screen units.
   fit(poses, targets) { this.map = fitAffine(poses, targets); this.offset = [0, 0]; }
 
+  // One-step calibration: the pose the person holds now points at (x, y). The range is fixed and
+  // comfortable (radians of head turn for the full width and height), not however far they turned.
+  // On a camera, turning toward screen-left and tilting up both raise the angle, so both signs are -1.
+  center(pose, x = 0.5, y = 0.5, yawRange = 0.40, pitchRange = 0.26) {
+    if (!pose) return false;
+    this.map = [[-1 / yawRange, 0, x + pose[0] / yawRange], [0, -1 / pitchRange, y + pose[1] / pitchRange]];
+    this.offset = [0, 0]; this.shown = null;
+    return true;
+  }
+
   // Pose -> point in 0..1 screen units, smoothed and clamped.
   point(pose, t) {
     if (!this.map || !pose) return null;
