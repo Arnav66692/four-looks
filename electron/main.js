@@ -28,7 +28,9 @@ function typeIntoFrontApp(text, pressReturn, deletes = 0) {
   });
 }
 
-const quit = (why) => { process.stdout.write(`four looks quit: ${why}\n`); app.quit(); };
+let quitWhy = null;
+const quit = (why) => { quitWhy = why; process.stdout.write(`four looks quit: ${why}\n`); app.quit(); };
+app.on("before-quit", () => { if (!quitWhy) process.stdout.write("four looks quit: Command+Q or the Dock\n"); });
 ipcMain.handle("four-looks:quit", () => quit("quit button"));
 
 ipcMain.handle("four-looks:resize", (e, fraction) => {
