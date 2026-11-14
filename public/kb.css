@@ -110,6 +110,7 @@ body {
   font: inherit; font-weight: 500; padding: 6px 13px; border-radius: 9px; cursor: pointer;
   border: 1px solid var(--key-edge); background: var(--key); color: var(--ink); box-shadow: var(--key-shadow);
 }
+#bar button.on { color: var(--accent); box-shadow: 0 0 0 1.5px var(--accent); }
 #bar a { color: var(--muted); text-decoration: none; }
 
 /* pointer */

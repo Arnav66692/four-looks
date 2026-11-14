@@ -13,6 +13,7 @@ const SIGMA = 0.45;                                     // press spread, in key 
 const STICKY = 0.25;                                    // hover stays until the pointer is this far into a new key
 const CHIP_SLOTS = 4;
 const POINTER_KEY = "fourlooks.pointer.v1";
+const HOLD_KEY = "fourlooks.hold.v1";
 const WORDS_KEY = "fourlooks.words.v1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,12 +46,14 @@ let keyWidth = 60;
 let lastFrame = null;
 let usingCamera = false;
 let calibrating = false;
+let holdToPress = loadHold();   // off by default: blink presses, holding only highlights
 const watchers = new Set();
 
 function loadPointer() {
   try { return HeadPointer.from(JSON.parse(localStorage.getItem(POINTER_KEY))); } catch { return new HeadPointer(); }
 }
 function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
+function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 function prompt(text, big = false) { $("prompt").textContent = text; $("prompt").classList.toggle("big", big); }
 
@@ -218,7 +221,7 @@ function movePointer(x, y, t) {
     el?.classList.add("hover");
   }
   let progress = 0;
-  if (hoverEl && armed && !calibrating) {
+  if (hoverEl && armed && !calibrating && holdToPress) {
     progress = Math.min(1, (t - hoverSince) / DWELL);
     if (progress >= 1) {
       press(hoverEl, x, y);
@@ -286,7 +289,7 @@ async function calibrate() {
     pointer.fit(poses, used);
     store(POINTER_KEY, pointer);
     record("calibrate", { points: poses.length });
-    prompt("Ready. Hold on a key or blink to press.");
+    prompt("Ready. Blink to press keys.");
   } else prompt("Lost your face during calibration. Add light and try again.");
   calibrating = false;
 }
@@ -297,13 +300,16 @@ $("start").addEventListener("click", async () => {
   try {
     await startFace($("video"), onFrame);
     usingCamera = true;
-    prompt(pointer.ready ? (LIVE ? "Ready. Click into any text box, then type. Hold on a key or blink to press." : "Ready. Hold on a key or blink to press.") : "Press calibrate.");
+    prompt(pointer.ready ? (LIVE ? "Ready. Click into any text box, then blink to press keys." : "Ready. Blink to press keys.") : "Press calibrate.");
   } catch (err) {
     prompt(`Camera failed: ${err.message}`);
     $("start").disabled = false;
   }
 });
 $("calibrate").addEventListener("click", () => { if (!calibrating) calibrate(); });
+function showHold() { $("hold").textContent = holdToPress ? "hold to press: on" : "hold to press: off"; $("hold").classList.toggle("on", holdToPress); }
+$("hold").addEventListener("click", () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); showHold(); });
+showHold();
 if (window.fourLooksOut?.quit) { $("quit").hidden = false; $("quit").addEventListener("click", () => window.fourLooksOut.quit()); }
 
 // The mouse drives the same pointer when the camera is off, for testing and for mouse users.
