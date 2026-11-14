@@ -14,15 +14,18 @@ const REACH_KEY = "fourlooks.reach.v3";
 const TUNE_KEY = "fourlooks.tune.v2";                   // sensitivity and smoothing found by the tuning run
 const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
-const STICKY = 0.2;                                     // margin (in key sizes) a fresh hover keeps
-const STICKY_LOCKED = 0.45;                             // margin once you have stayed on a key a moment
-const CORE = 0.2;                                       // the middle of a key: this far in from each edge
-const LOCK_MS = 250;                                    // time to grow from STICKY to STICKY_LOCKED
+const GAP = 0.2;                                        // the gap between keys belongs to the nearest key within this (key sizes)
+const EDGE_HAIR = 0.08;                                 // an unlocked key keeps this much past its edge, to stop flicker on a boundary
+const LOCK_AT = 0.5;                                    // a key locks once this share of the hold has been spent on it
+const STICKY_LOCKED = 0.5;                              // how far past its edge (in key sizes) a locked key still holds
+const CORE_LOCKED = 0.3;                                // a locked key gives way only this deep inside another key
+const LOCK_STEADY = 1.8;                                // while a key is locked, head tremor this much larger is ignored
 const VOTE_MS = 350;                                    // a press goes to the key you were on most in this window
-const SWITCH_MS = 90;                                   // a new key takes the selection after the pointer has been in it this long
+let holdEl = null, holdP = 0, holdT = 0, lockedEl = null, pressedEl = null, offSince = null;
+const REARM_MS = 250;                                   // a pressed key can press again once the cursor has been off it this long
+const HOLD_DRAIN = 1.6;                                 // a hold drains this many times slower than it builds
+const SWITCH_MS = 40;                                   // a new key takes the selection after the pointer has been in it this long
 let switchTo = null, switchSince = 0;
-const MAGNET = 0.8;                                    // how far the drawn cursor leans toward the key centre
-const PRIOR_POW = 0.5;                                  // how much likely next letters grow their hidden target
 const NOD_AMP = Number(params.get("nod") || 0.3);        // a nod dips at least this much of your calibrated up-down range
 const NOD_START = 0.07;                                 // a dip this big starts the nod clock
 const NOD_MS = 550;                                     // and the head is back within this long
@@ -39,7 +42,7 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
+    ["123", "menu", "mouse", "space", "undo", "fix", "grok", "speak"],
   ],
   // Every letter on its own key, arranged for a head and not for hands. The ten most used letters
   // (e t a o i n s h r d) fill the middle row with the busiest in the centre, the next eight sit below
@@ -48,7 +51,7 @@ const LAYOUTS = {
     ["⌫", ..."qjvpbkxz", "'", "send"],
     [..."rsiaetonhd"],
     ["shift", ..."gwulcmfy", ",", ".", "?"],
-    ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
+    ["123", "menu", "mouse", "space", "undo", "fix", "grok", "speak"],
   ],
   // Boxes: built around where the head rests, not where hands rest. Share of English letters by key:
   // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
@@ -67,7 +70,7 @@ const LAYOUTS = {
     ["abc", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
 };
-const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu", "layout", "mouse"]);
+const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu", "layout", "mouse", "grok"]);
 const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const ICONS = {
   "⌫": svg('<path d="M9 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-6-6z"/><path d="M12.5 10l4 4m0-4l-4 4"/>'),
@@ -75,7 +78,7 @@ const ICONS = {
   caps: svg('<path d="M12 3l8 9h-5v5H9v-5H4z"/><path d="M9 21h6"/>'),
   menu: svg('<circle cx="6" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="18" cy="12" r="1.3" fill="currentColor"/>'),
 };
-const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", undo: "undo", fix: "fix", menu: "⋯", mouse: "mouse" };
+const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", undo: "undo", fix: "fix", menu: "⋯", mouse: "mouse", grok: "grok" };
 
 const log = [];
 const record = (type, extra = {}) => log.push({ t: Date.now(), type, ...extra });
@@ -241,6 +244,7 @@ function noteFix() {
 
 function acceptGhost(how) {
   if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
+  if (how === "nod" && grok.busy) { answerGrok(true); return true; }       // while Grok works, a nod only ever means yes
   if (how === "nod" && mode === "mouse") { clickAtRest("nod"); return true; }
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
@@ -316,7 +320,9 @@ function press(el, x, y) {
   setTimeout(() => el.classList.remove("pressed"), 120);
   if (k === "menu") { toggleMenu(); return; }
   if (k === "mouse") { setMode("mouse"); return; }
-  if (k === "dock:keyboard") { setMode("keyboard"); return; }
+  if (k === "grok") { runGrok(); return; }
+  if (k === "dock:stop") { stopGrok("you"); return; }
+  if (k === "dock:keyboard") { if (grok.busy) stopGrok("you"); setMode("keyboard"); return; }
   if (k === "dock:quit") { window.fourLooksOut?.quit?.(); return; }
   if (k.startsWith("set:")) { runSetting(k.slice(4)); return; }
   const before = typer.text().length;
@@ -434,27 +440,38 @@ function updatePrior() {
   });
 }
 
-const letterEls = () => document.querySelectorAll("#keys .key[data-key]");
 function keyAt(x, y) {
+  // The key under the cursor is the key selected. Nothing pulls the selection toward a likely letter:
+  // that made unlikely letters hard to reach. The word model still corrects presses afterwards.
   const hit = document.elementFromPoint(x, y)?.closest("[data-key]") || null;
-  const onLetters = !hit || (hit.dataset.key.length === 1 && LETTERS.includes(hit.dataset.key));
-  if (!letterPrior || !onLetters || !letterCenters.length) return hit;
-  // Letters near the pointer compete: closeness times how likely the word model says they are next.
-  const s = 0.5 * keyWidth;
-  let best = null, bestScore = 0;
-  for (const c of letterCenters) {
-    const d2 = (x - c.x) ** 2 + (y - c.y) ** 2;
-    if (d2 > (1.1 * keyWidth) ** 2) continue;
-    const score = Math.exp(-d2 / (2 * s * s)) * (letterPrior[LETTERS.indexOf(c.letter)] + 0.02) ** PRIOR_POW;
-    if (score > bestScore) { bestScore = score; best = c.letter; }
+  if (hit) return hit;
+  // Between two keys there is a thin gap. The nearest key within reach of the gap takes it, so there is no dead space.
+  // Past the outer edge of the keyboard the nearest key takes it however far out the cursor is, so the
+  // keys on the edges are the easiest to hit, not the hardest.
+  const menuOpen = document.body.classList.contains("menu-open");
+  let best = null, bestD = Infinity, bestSize = 1, box = null;
+  for (const el of document.querySelectorAll(menuOpen ? "#menu [data-key]" : "#keys [data-key], #chips [data-key]")) {
+    const r = el.getBoundingClientRect();
+    if (!r.width) continue;
+    box = box ? { l: Math.min(box.l, r.left), r: Math.max(box.r, r.right), t: Math.min(box.t, r.top), b: Math.max(box.b, r.bottom) } : { l: r.left, r: r.right, t: r.top, b: r.bottom };
+    const d = Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
+    if (d < bestD) { bestD = d; best = el; bestSize = Math.min(r.width, r.height); }
   }
-  if (!best) return hit;
-  return [...letterEls()].find((el) => el.dataset.key === best) || hit;
+  if (!best) return null;
+  // Only the sides and the bottom extend. Above the suggestions is the text box, where you rest to read.
+  const outside = !menuOpen && y >= box.t && (x < box.l || x > box.r || y > box.b);
+  return outside || bestD <= GAP * bestSize ? best : null;
 }
+// How much of the press time has been spent on the selected key, 0 to 1.
+function lockShare(t) {
+  if (!hoverEl) return 0;
+  return holdToPress ? (holdEl === hoverEl ? holdP : 0) : Math.min(1, (t - hoverSince) / DWELL);
+}
+const isLocked = (t) => lockShare(t) >= LOCK_AT;
 function stillOn(el, x, y, t) {
   if (!el || !el.isConnected) return false;
-  const grow = Math.min(1, (t - hoverSince) / LOCK_MS);
-  const r = el.getBoundingClientRect(), m = (STICKY + (STICKY_LOCKED - STICKY) * grow) * Math.min(r.width, r.height);
+  // Before the lock a key keeps only a hair past its edge, enough to stop flicker on the line between two keys.
+  const r = el.getBoundingClientRect(), m = (isLocked(t) ? STICKY_LOCKED : EDGE_HAIR) * Math.min(r.width, r.height);
   return x > r.left - m && x < r.right + m && y > r.top - m && y < r.bottom + m;
 }
 // The key you were on for most of the last VOTE_MS, and where you were on it.
@@ -478,14 +495,15 @@ function pickHover(x, y, t) {
   const inMenu = (el) => !!el && !!el.closest("#menu");
   if (hoverEl && inMenu(hoverEl) !== menuOpen) return menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
   const top = menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
-  // The lock holds through wobble at a key's edge, but a clear move into the middle of another key wins.
+  // Before the lock the selection is simply the key under the cursor. Once locked (half the hold spent),
+  // the key holds through wobble past its edge and only a clear move deep into another key takes over.
   const zone = (el) => (el ? (el.closest("#chips") ? "chips" : el.closest("#keys") ? "keys" : "other") : null);
   if (top && hoverEl && zone(top) !== zone(hoverEl)) return top;      // the lock never reaches from a key into the suggestions, or back
-  if (stillOn(hoverEl, x, y, t) && !(top && top !== hoverEl && inCore(top, x, y))) return hoverEl;
+  if (stillOn(hoverEl, x, y, t) && !(isLocked(t) && top && top !== hoverEl && inCore(top, x, y))) return hoverEl;
   return top;
 }
 function inCore(el, x, y) {
-  const r = el.getBoundingClientRect(), mx = CORE * r.width, my = CORE * r.height;
+  const r = el.getBoundingClientRect(), mx = CORE_LOCKED * r.width, my = CORE_LOCKED * r.height;
   return x > r.left + mx && x < r.right - mx && y > r.top + my && y < r.bottom - my;
 }
 const onlyMenu = (el) => (el && el.closest("#menu") ? el : null);
@@ -499,28 +517,47 @@ function movePointer(x, y, t) {
   } else switchTo = null;
   history.push({ t, el, x, y });
   while (history.length && t - history[0].t > VOTE_MS * 2) history.shift();
-  let dx = x, dy = y;
-  if (el) { const r = el.getBoundingClientRect(); dx += MAGNET * (r.left + r.width / 2 - x); dy += MAGNET * (r.top + r.height / 2 - y); }
   const c = $("cursor");
   c.style.display = "block";
-  c.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+  c.style.transform = `translate3d(${x}px, ${y}px, 0)`;      // drawn exactly where the head points
   if (el !== hoverEl) {
     setFill(hoverEl, 0);
     hoverEl?.classList.remove("hover");
     hoverEl = el; hoverSince = t; armed = true;
     el?.classList.add("hover");
   }
+  // Hold to press: the hold builds while you are on a key and drains slowly when you slip off it,
+  // so a brief slip does not start you again from zero.
+  const dtHold = Math.min(120, Math.max(0, t - holdT)); holdT = t;
   let progress = 0;
-  if (hoverEl && armed && !calibrating && holdToPress && !study.capture) {
-    progress = Math.min(1, (t - hoverSince) / DWELL);
-    if (progress >= 1) {
-      press(hoverEl, x, y);
-      armed = hoverEl.dataset.key === "⌫";   // backspace repeats while you stay on it
-      hoverSince = t;
-      progress = 0;
+  if (!calibrating && holdToPress && !study.capture) {
+    if (holdEl && !holdEl.isConnected) { holdEl = null; holdP = 0; }
+    // A key that was just pressed stays quiet until the cursor has clearly left it, so wobble on its edge cannot repeat it.
+    if (pressedEl) {
+      if (hoverEl === pressedEl) offSince = null;
+      else if (offSince == null) offSince = t;
+      else if (t - offSince > REARM_MS) pressedEl = null;
     }
-  }
-  setFill(hoverEl, progress);
+    const quiet = hoverEl === pressedEl && hoverEl?.dataset.key !== "⌫";
+    if (hoverEl && hoverEl === holdEl && !quiet) holdP += dtHold / DWELL;
+    else {
+      holdP -= dtHold / (DWELL * HOLD_DRAIN);
+      if (holdP <= 0) { setFill(holdEl, 0); holdEl = hoverEl; holdP = 0; }
+    }
+    if (holdEl && holdP >= 1) {
+      const r = holdEl.getBoundingClientRect();
+      press(holdEl, Math.min(r.right, Math.max(r.left, x)), Math.min(r.bottom, Math.max(r.top, y)));
+      pressedEl = holdEl; offSince = null;   // backspace is the one key that repeats while you stay on it
+      holdP = 0; hoverSince = t;
+    }
+    progress = Math.max(0, Math.min(1, holdP));
+    setFill(holdEl, progress);
+  } else if (holdEl) { setFill(holdEl, 0); holdEl = null; holdP = 0; }
+  if (hoverEl !== holdEl) setFill(hoverEl, 0);
+  const locked = !calibrating && isLocked(t);
+  if (lockedEl && (lockedEl !== hoverEl || !locked)) { lockedEl.classList.remove("locked"); lockedEl = null; }
+  if (locked && hoverEl && lockedEl !== hoverEl) { lockedEl = hoverEl; lockedEl.classList.add("locked"); }
+  pointer.steady = locked ? LOCK_STEADY : 1;
   $("ring").style.strokeDashoffset = String(100.5 * (1 - progress));
 }
 
@@ -595,6 +632,7 @@ function detectShake(f) {
   if (Math.abs(shake.peak) >= SHAKE_AMP && Math.abs(dx) < 0.35 * Math.abs(shake.peak)) {
     const dir = Math.sign(shake.peak);
     shake.state = "rest";
+    if (grok.busy) { shake.last = null; if (grok.confirm != null) answerGrok(false); else stopGrok("shake"); return; }   // a shake says no, or stops Grok
     if (shake.last && shake.last.dir === dir && f.t - shake.last.t < SHAKE_PAIR_MS) {
       shake.last = null;
       tick();
@@ -606,12 +644,71 @@ function detectShake(f) {
 // The keyboard comes up by itself when a text box takes the focus.
 let lastRole = "";
 setInterval(async () => {
-  if (!desk || mode !== "mouse" || calibrating) return;
+  if (!desk || mode !== "mouse" || calibrating || grok.busy) return;
   const role = await desk.focusRole();
   const isText = TEXT_ROLES.test(role);
   if (isText && !TEXT_ROLES.test(lastRole)) setMode("keyboard", "text box");
   lastRole = role;
 }, 900);
+
+// ---------- Grok does it: the sentence in the text box becomes a task on the computer ----------
+// The window shrinks to the dock so Grok can see and use the whole screen. The head does not move
+// the cursor while Grok works. A nod answers yes, a shake answers no, or stops Grok if it asked nothing.
+const grok = { busy: false, confirm: null };
+const dockHint = (text) => { const h = document.querySelector("#dock .hint"); if (h) h.textContent = text; };
+const DOCK_IDLE = "nod to click · shake twice to switch apps";
+const fakeAgent = { runs: [], run: async (goal) => { fakeAgent.runs.push(goal); await sleep(300); return { ok: true, steps: 1, summary: `sim: ${goal}`, routed: true, modelCalls: 0, totalMs: 300 }; } };
+window.fourLooks.agent = fakeAgent;
+function answerGrok(yes) {
+  if (grok.confirm == null) return;
+  const id = grok.confirm; grok.confirm = null;
+  tick();
+  record("grok-answer", { yes });
+  dockHint(yes ? "Grok: going ahead." : "Grok: not doing that.");
+  out?.agentAnswer?.(id, yes);
+}
+function stopGrok(why) {
+  if (!grok.busy) return;
+  record("grok-stop", { why });
+  dockHint("Stopping Grok.");
+  out?.agentStop?.();
+}
+out?.onAgent?.((ev) => {
+  if (!grok.busy) return;
+  if (ev.type === "confirm") { grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod = yes. Shake = no.`); }
+  else if (ev.type === "step") dockHint(ev.action === "thinking" ? "Grok is thinking." : `Grok: ${ev.reason || ev.action}`);
+});
+async function runGrok() {
+  const run = out?.agentRun || (params.get("sim") ? fakeAgent.run : null);
+  if (!run || !desk) { prompt("Grok control needs the desktop app."); return; }
+  if (grok.busy) return;
+  typer.commitWord();
+  const goal = typer.text().trim();
+  if (!goal) { prompt("Type what you want done, then press grok. Try: open gmail"); return; }
+  // The sentence was typed live into the app in front. Take it back out: it was an instruction, not a message.
+  if (LIVE && mirrored.length) { const n = mirrored.length; mirrored = ""; queue = queue.then(() => out.edit(n, "")); await queue; }
+  typer.clear(); mirrored = "";
+  updateKeys(); renderText(); updatePrior();
+  grok.busy = true; grok.confirm = null;
+  record("grok", { goal });
+  const t0 = performance.now();
+  let r;
+  try {
+    await setMode("mouse", "grok");
+    document.body.classList.add("grokmode");
+    await desk.mode("grok");
+    dockHint("Grok is thinking.");
+    r = await run(goal);
+  } catch (err) { r = { ok: false, stoppedWhy: String(err?.message || err) }; }
+  const sec = ((r.totalMs ?? performance.now() - t0) / 1000).toFixed(1);
+  record("grok-end", { ok: !!r.ok, sec: +sec, steps: r.steps ?? 0, modelCalls: r.modelCalls ?? null, routed: !!r.routed, why: r.stoppedWhy || "" });
+  grok.busy = false; grok.confirm = null;
+  document.body.classList.remove("grokmode");
+  dockHint(DOCK_IDLE);
+  await setMode("keyboard", "grok done");
+  prompt(r.ok ? `Grok, ${sec} s: ${r.summary || "done"}` : `Grok stopped: ${r.stoppedWhy || "no result"}`);
+}
+window.fourLooks.runGrok = runGrok;
 
 // ---------- nod: a quick, clear dip and return of the head accepts the grey guess ----------
 // Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
@@ -685,7 +782,7 @@ function onFrame(f) {
   if (!cueCfg.calibrated || c <= cueCfg.freeze) freezeSince = null; else if (freezeSince == null) freezeSince = f.t;
   const closing = freezeSince != null && f.t - freezeSince < FREEZE_MAX_MS;
   if (mode === "mouse") {
-    if (!closing) { const p = pointer.point(f.pose, f.t); if (p) driveMouse(p, f.t); }
+    if (!closing && !grok.busy) { const p = pointer.point(f.pose, f.t); if (p) driveMouse(p, f.t); }   // Grok has the cursor while it works
     detectShake(f);
   } else if (!closing) {
     const p = pointer.point(f.pose, f.t);
@@ -702,7 +799,7 @@ function onFrame(f) {
     if (blinkSince == null) blinkSince = f.t;
     const target = intended(blinkSince);       // where you were when the press move started
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && study.capture) { blinkFired = true; study.onPress?.(performance.now()); }
-    if (!blinkFired && f.t - blinkSince > cueCfg.ms && mode === "mouse") { blinkFired = true; clickAtRest("press move"); }
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms && mode === "mouse") { blinkFired = true; if (!grok.busy) clickAtRest("press move"); }
     if (!blinkFired && f.t - blinkSince > cueCfg.ms + pressExtra && target) {
       blinkFired = true;
       // For studying drift on a real face: where the head was in the camera frame at this press.
@@ -887,7 +984,7 @@ function drawAdmin(f, c) {
     cue: { name: CUES[cueCfg.cue].name, score: c, thr: cueCfg.thr, freeze: cueCfg.freeze, needMs: cueCfg.ms, heldMs: blinkSince == null ? 0 : f.t - blinkSince },
     nod: { state: nod.state, dip: unit && nod.rest != null ? Math.max(0, unit[1] - nod.rest) : 0, need: NOD_AMP, ms: NOD_MS },
     eyesShutMs: eyesShutSince == null ? 0 : f.t - eyesShutSince,
-    hover: hoverEl ? (hoverEl.dataset.word || hoverEl.dataset.key) : "", lock: hoverEl ? Math.min(1, (f.t - hoverSince) / LOCK_MS) : 0,
+    hover: hoverEl ? (hoverEl.dataset.word || hoverEl.dataset.key) : "", lock: lockShare(f.t),
     vote: vote ? (vote.el.dataset.word || vote.el.dataset.key) : "", lastPress, nextLetters: top, words,
   });
 }

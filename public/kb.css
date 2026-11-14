@@ -467,5 +467,17 @@ body.mousemode #dock {
 #dock button svg { display: block; width: 100%; height: 100%; }
 .key[data-key="mouse"] { font-size: clamp(11px, 1.1vw, 15px); }
 
-/* the cursor glides from key to key instead of floating free */
-#cursor { transition: transform 90ms cubic-bezier(.2, .8, .2, 1); }
+/* the cursor is drawn exactly where the head points, with no animation: any delay here causes overshoot */
+#cursor { transition: none; }
+
+/* a locked key: half the hold is spent, it now holds through wobble */
+.key.locked .cap { box-shadow: inset 0 0 0 2.5px var(--accent), inset 0 1px 0 var(--cap-hi); }
+#chips .locked { box-shadow: inset 0 0 0 2px var(--accent) !important; }
+
+/* Grok is working: the dock shows what it is doing, and a stop button */
+#dock [data-key="dock:stop"] { display: none; color: var(--accent); }
+body.grokmode #dock [data-key="dock:stop"] { display: block; }
+body.grokmode #dock .hint { color: var(--ink); }
+body.grokmode #dock .logo { animation: grok-think 1.1s var(--out) infinite alternate; }
+@keyframes grok-think { from { transform: rotate(0deg) scale(1); } to { transform: rotate(90deg) scale(.9); } }
+@media (prefers-reduced-motion: reduce) { body.grokmode #dock .logo { animation: none; } }

@@ -1,8 +1,13 @@
 // Head pointer: head pose -> smoothed screen point. Per person: an affine map fitted from
-// a center look plus four corner looks, then a One Euro filter for jitter.
+// the calibration dots, then a steady filter for tremor. The cursor is drawn where the head points.
 
-const EDGE = 0.04;          // how far past the screen edge the head may point before the mapping slides
-const OFFSET_CAP = 0.8;     // most the mapping may slide, in screen units
+const MAX_STEP = 0.12;      // the most one camera frame may move the reading, in screen units
+// Look-ahead is off: on the simulated face with 120 ms camera delay it cut 50 ms of lag but more than
+// doubled overshoot (about 64 px against 23 px on a 300 px move). Add ?lead=1 to the address to try it.
+const LEAD_ON = new URLSearchParams(globalThis.location?.search || "").get("lead") === "1";
+const LEAD_S = 0.09;        // the cursor is drawn where the head will be this many seconds from now, to hide camera delay
+const LEAD_MIN_SPEED = 0.25; // screen units a second: below this the head is settling, so no look-ahead
+const LEAD_CAP = 0.07;      // most the look-ahead may add, in screen units
 
 class OneEuro {
   constructor(minCutoff = 1.2, beta = 0.02, dCutoff = 1.0) {
@@ -47,12 +52,14 @@ function fitAffine(poses, targets) {
 // smoothing depends on how far the head has moved from where the cursor sits: inside the tremor band
 // the cursor barely moves, and once the head has clearly moved the cursor follows it directly.
 class Steady {
-  constructor(aMin = 0.05, band = 0.010, full = 0.04) { Object.assign(this, { aMin, band, full, y: null, buf: [] }); }
-  filter(x) {
-    this.buf.push(x); if (this.buf.length > 3) this.buf.shift();
-    const m = [...this.buf].sort((a, b) => a - b)[Math.floor(this.buf.length / 2)];
+  constructor(aMin = 0.05, band = 0.010, full = 0.04) { Object.assign(this, { aMin, band, full, y: null, last: null }); }
+  filter(x, steady = 1) {
+    // Spike guard with no delay: one frame cannot move the reading further than a fast real head move would.
+    const m = this.last == null ? x : this.last + Math.max(-MAX_STEP, Math.min(MAX_STEP, x - this.last));
+    this.last = m;
     if (this.y == null) { this.y = m; return m; }
-    const k = Math.min(1, Math.max(0, (Math.abs(m - this.y) - this.band) / (this.full - this.band)));
+    const band = this.band * steady, full = this.full + (band - this.band);
+    const k = Math.min(1, Math.max(0, (Math.abs(m - this.y) - band) / (full - band)));
     this.y += (this.aMin + (1 - this.aMin) * k * k) * (m - this.y);
     return this.y;
   }
@@ -66,7 +73,9 @@ export class HeadPointer {
     this.range = null;         // the person's own comfortable range: { c, left, right, up, down, area }
     this.fx = new Steady(aMin, band, full); this.fy = new Steady(aMin, band, full);
     this.deadzone = deadzone; this.gain = gain; this.shown = null;
-    this.offset = [0, 0];      // slides when the head pushes past an edge or on recenter, in screen units
+    this.lead = LEAD_ON ? LEAD_S : 0; this.vel = [0, 0]; this.leadPrev = null; this.leadT = 0;
+    this.offset = [0, 0];      // set only by a deliberate recenter, in screen units
+    this.steady = 1;           // above 1 while a key is locked: small head tremor moves the cursor less
   }
   get ready() { return !!(this.map || this.range); }
 
@@ -126,14 +135,20 @@ export class HeadPointer {
   point(pose, t) {
     if (!this.ready || !pose) return null;
     const raw = this.project(pose).map((v, k) => v + this.offset[k]);
-    // Edge re-centering: turning past the edge slides the mapping along, so turning back moves the
-    // cursor straight away. This sheds whatever offset posture has built up.
-    for (let k = 0; k < 2; k++) {
-      const over = raw[k] < -EDGE ? raw[k] + EDGE : raw[k] > 1 + EDGE ? raw[k] - 1 - EDGE : 0;
-      if (over) { this.offset[k] = Math.max(-OFFSET_CAP, Math.min(OFFSET_CAP, this.offset[k] - over)); raw[k] -= over; }
-    }
+    // The mapping never slides by itself. In a real session the old edge re-centering moved it about
+    // 400 px sideways after one look away, which put some keys out of reach. Recenter is deliberate only.
     const clamp = (x) => Math.min(1, Math.max(0, x));
-    const p = [clamp(this.fx.filter(raw[0])), clamp(this.fy.filter(raw[1]))];
+    const f = [this.fx.filter(raw[0], this.steady), this.fy.filter(raw[1], this.steady)];
+    // Look-ahead: while the head is clearly moving, draw the cursor a little ahead along its path.
+    // A cursor that trails the head makes people turn too far and swing back.
+    const dt = this.leadT ? Math.max((t - this.leadT) / 1000, 1e-3) : 0;
+    const p = [0, 1].map((k) => {
+      if (!dt || !this.leadPrev) return clamp(f[k]);
+      this.vel[k] += 0.5 * ((f[k] - this.leadPrev[k]) / dt - this.vel[k]);
+      const v = this.vel[k], lead = this.lead > 0 && Math.abs(v) > LEAD_MIN_SPEED ? Math.max(-LEAD_CAP, Math.min(LEAD_CAP, v * this.lead)) : 0;
+      return clamp(f[k] + lead);
+    });
+    this.leadPrev = f; this.leadT = t;
     if (this.shown && Math.hypot(p[0] - this.shown[0], p[1] - this.shown[1]) < this.deadzone) return this.shown;
     this.shown = p;
     return p;

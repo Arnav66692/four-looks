@@ -7,6 +7,8 @@ const HZ = 33;
 const POSE_X = 0.30, POSE_Y = 0.22;        // radians of head turn per screen width / height
 const Q = new URLSearchParams(location.search);
 const JITTER = Number(Q.get("noise") || 0.0012);   // radians of tremor (a real face measured nearer 0.004)
+const LAG_MS = Number(Q.get("lag") || 0);          // camera pipeline delay to simulate, ms
+const delayed = [];
 const SPIKE = Number(Q.get("spike") || 0);         // chance per frame of a single-frame jump of 5 times the tremor
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(2 * Math.PI * Math.random());
@@ -34,6 +36,13 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     const bias = DRIFT && driftStart != null ? (DRIFT * (performance.now() - driftStart)) / 60000 : 0;
     const jump = () => (Math.random() < SPIKE ? 5 * JITTER * (Math.random() < 0.5 ? -1 : 1) : 0);
     const pose = [(0.5 - head.x) * POSE_X + 0.6 * bias + JITTER * gauss() + jump(), (0.5 - head.y - dip) * POSE_Y - drift - bias + JITTER * gauss() + jump()];
+    if (LAG_MS > 0) {                           // the app sees the head as it was LAG_MS ago, like a real camera pipeline
+      delayed.push({ at: performance.now(), pose, scores });
+      while (delayed.length > 1 && performance.now() - delayed[1].at >= LAG_MS) delayed.shift();
+      if (performance.now() - delayed[0].at < LAG_MS) return;
+      onFrame({ t: performance.now(), head: [0, 0], pose: delayed[0].pose, scores: delayed[0].scores, face: true });
+      return;
+    }
     onFrame({ t: performance.now(), head: [0, 0], pose, scores, face: true });
   }, HZ);
 
