@@ -1,17 +1,26 @@
 // Text state for the full keyboard. Letters arrive as probabilities over a-z (where the
-// pointer landed), and the decoder fixes near misses when a word ends. Pure logic, no DOM.
+// pointer landed). At a word end the typed letters compete with dictionary words: a dictionary
+// word wins only if it fits the presses and the context clearly better. Pure logic, no DOM.
 
 export const LETTERS = "abcdefghijklmnopqrstuvwxyz";
-const SURE = 0.6;            // a press this sure counts as typed exactly
-const END_SENTENCE = /[.!?]\s*$/;
+const LOG10 = Math.log(10);
+const OOV_PRIOR = -7.0;          // log10 word-model score given to a word the dictionary lacks
+const LEARNED_PRIOR = -3.5;      // log10 score of a word from the person's own list
+const ADDED_APOSTROPHE = -1.0;   // cost of a dictionary word adding an apostrophe you did not type
+const RAW_CHARS = /[@#:/$_\-0-9+=&%*]/;   // once one of these is in a token, nothing in it is corrected
+const SENTENCE_END = /[.!?]\s*$/;
 
 export class KeyTyper {
   constructor(decoder) {
     this.dec = decoder;
     this.committed = "";
-    this.pending = [];       // [{ probs, char, upper }]
+    this.pending = [];       // [{ probs, char, upper }] ; apostrophes are { char: "'", probs: null }
     this.shift = "once";     // off | once | lock. Starts capitalised.
+    this.raw = false;        // inside an email, link, tag, time or number
+    this.learned = new Set();
   }
+
+  learn(words) { for (const w of words) if (/^[a-z']+$/i.test(w)) this.learned.add(w.toLowerCase()); }
 
   letter(probs) {
     const char = LETTERS[probs.indexOf(Math.max(...probs))];
@@ -19,15 +28,25 @@ export class KeyTyper {
     if (this.shift === "once") this.shift = "off";
   }
 
+  apostrophe() { this.pending = [...this.pending, { probs: null, char: "'", upper: false }]; }
+
   toggleShift() { this.shift = { off: "once", once: "lock", lock: "off" }[this.shift]; }
 
-  // A symbol, digit or space. Finishes the word first.
+  // A symbol, digit or space.
   literal(str) {
+    if (str === "'") { this.apostrophe(); return; }
+    if (str === " ") {
+      this.commitWord();
+      this.raw = false;
+      if (this.committed === "" || this.committed.endsWith(" ")) return;
+      this.committed += " ";
+      if (SENTENCE_END.test(this.committed)) this.shift = "once";
+      return;
+    }
+    if (RAW_CHARS.test(str)) this.raw = true;
     this.commitWord();
-    if (str === " " && (this.committed === "" || this.committed.endsWith(" "))) return;
-    if (/^[.,!?;:]$/.test(str) && this.committed.endsWith(" ")) this.committed = this.committed.slice(0, -1);
+    if (/^[.,!?;:]$/.test(str) && this.committed.endsWith(" ") && !this.raw) this.committed = this.committed.slice(0, -1);
     this.committed += str;
-    if (/^[.!?]$/.test(str)) { this.committed += " "; this.shift = "once"; }
   }
 
   backspace() {
@@ -35,54 +54,94 @@ export class KeyTyper {
     this.committed = this.committed.slice(0, -1);
   }
 
-  clear() { this.committed = ""; this.pending = []; this.shift = "once"; }
+  clear() { this.committed = ""; this.pending = []; this.shift = "once"; this.raw = false; }
 
   history() {
-    if (!this.committed.trim() || END_SENTENCE.test(this.committed)) return -1;
+    if (!this.committed.trim() || SENTENCE_END.test(this.committed)) return -1;
     const m = this.committed.toLowerCase().match(/([a-z']+)[^a-z']*$/);
     return m ? this.dec.idOf(m[1]) : -1;
   }
 
   typedWord() { return this.pending.map((p) => p.char).join(""); }
+  letterSlots() { return this.pending.filter((p) => p.probs); }
 
-  caseLike(word) {
-    if (/^i('|$)/.test(word)) word = "I" + word.slice(1);
-    const ups = this.pending.map((p) => p.upper);
-    if (ups.length > 1 && ups.every(Boolean)) return word.toUpperCase();
-    if (ups[0]) return word[0].toUpperCase() + word.slice(1);
-    return word;
+  // Case the person typed on purpose: mixed case or all caps is kept exactly.
+  deliberateCase() {
+    const ups = this.letterSlots().map((p) => p.upper);
+    const n = ups.filter(Boolean).length;
+    return (n > 1 && n === ups.length) || ups.slice(1).some(Boolean);
   }
 
-  // Ranked guesses for the word being typed, or next-word guesses if nothing is pending.
-  suggestions(n = 3) {
-    const hist = this.history();
-    if (!this.pending.length) {
-      const succ = this.dec.bigrams.get(hist);
-      if (!succ) return [];
-      return [...succ.entries()].sort((a, b) => b[1] - a[1]).slice(0, n)
-        .map(([id]) => this.caseNext(this.dec.words[id]));
-    }
-    const guesses = this.dec.decodeWord(this.pending.map((p) => p.probs), hist, { top: n }).map((c) => this.caseLike(c.word));
-    const typed = this.caseLike(this.typedWord());
-    return [...new Set([...guesses, typed])].slice(0, n + 1);
+  caseLike(word) {
+    const ups = this.letterSlots().map((p) => p.upper);
+    if (ups.length > 1 && ups.every(Boolean)) return word.toUpperCase();
+    let k = 0;
+    const out = [...word.toLowerCase()].map((c) => (/[a-z]/.test(c) ? (ups[k++] ? c.toUpperCase() : c) : c)).join("");
+    return out.replace(/^i('|$)/, (m) => "I" + m.slice(1));
   }
 
   caseNext(word) {
     if (/^i('|$)/.test(word)) word = "I" + word.slice(1);
-    return this.shift !== "off" || this.committed === "" ? word[0].toUpperCase() + word.slice(1) : word;
+    return this.shift !== "off" || this.committed === "" || SENTENCE_END.test(this.committed)
+      ? word[0].toUpperCase() + word.slice(1) : word;
+  }
+
+  // Score the typed letters as their own word, against the same presses.
+  typedScore() {
+    let s = OOV_PRIOR;
+    for (const p of this.letterSlots()) s += Math.log(Math.max(Math.max(...p.probs), 1e-9)) / LOG10;
+    return s;
+  }
+
+  // Ranked choices: dictionary words and the typed letters, best first.
+  ranked(n = 4) {
+    const slots = this.letterSlots();
+    const typed = this.typedWord();
+    if (!slots.length) return [];
+    const typedHasApostrophe = typed.includes("'");
+    const cands = this.dec.decodeWord(slots.map((p) => p.probs), this.history(), { top: 8 }).map((c) => {
+      let score = c.score;
+      if (c.word.includes("'") && !typedHasApostrophe) score += ADDED_APOSTROPHE;
+      if (typedHasApostrophe && c.word.replace(/[^']/g, "").length === 0) score += ADDED_APOSTROPHE;
+      return { word: c.word, score };
+    });
+    for (const w of this.learned) {           // personal words compete like dictionary words
+      const letters = w.replace(/[^a-z]/g, "");
+      if (letters.length !== slots.length) continue;
+      let sc = LEARNED_PRIOR;
+      for (let k = 0; k < letters.length; k++) sc += Math.log(Math.max(slots[k].probs[LETTERS.indexOf(letters[k])], 1e-9)) / LOG10;
+      cands.push({ word: w, score: sc, learned: true });
+    }
+    const typedIsWord = this.dec.idOf(typed.toLowerCase()) >= 0 || this.learned.has(typed.toLowerCase());
+    if (!typedIsWord) cands.push({ word: typed.toLowerCase(), score: this.typedScore(), typed: true });
+    cands.sort((a, b) => b.score - a.score);
+    const seen = new Set();
+    return cands.filter((c) => !seen.has(c.word) && seen.add(c.word)).slice(0, n);
   }
 
   // What a word end turns the pending letters into.
   bestWord() {
     if (!this.pending.length) return "";
     const typed = this.typedWord();
-    const top = this.dec.decodeWord(this.pending.map((p) => p.probs), this.history(), { top: 1 })[0];
-    if (!top) return this.caseLike(typed);
-    // Sure presses that spell an unknown word far from any guess are probably a name: keep them.
-    const sure = this.pending.every((p) => Math.max(...p.probs) >= SURE);
-    const diff = [...typed].filter((c, i) => c !== top.word.replace(/'/g, "")[i]).length;
-    if (sure && this.dec.idOf(typed) < 0 && diff * 2 > typed.length) return this.caseLike(typed);
-    return this.caseLike(top.word);
+    if (this.raw || this.deliberateCase() || !this.letterSlots().length) return this.exactCase(typed);
+    const top = this.ranked(1)[0];
+    return top.typed ? this.exactCase(typed) : this.caseLike(top.word);
+  }
+
+  exactCase(typed) {
+    return this.pending.map((p) => (p.upper ? p.char.toUpperCase() : p.char)).join("").replace(/^i('|$)/, (m) => "I" + m.slice(1)) || typed;
+  }
+
+  // Chips: the word being typed, or next-word guesses between words.
+  suggestions(n = 3) {
+    if (!this.pending.length) {
+      const succ = this.dec.bigrams.get(this.history());
+      if (!succ) return [];
+      return [...succ.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => this.caseNext(this.dec.words[id]));
+    }
+    const best = this.bestWord();
+    const others = this.raw ? [] : this.ranked(n + 1).map((c) => (c.typed ? this.exactCase(this.typedWord()) : this.caseLike(c.word)));
+    return [...new Set([best, ...others, this.exactCase(this.typedWord())])].slice(0, n + 1);
   }
 
   commitWord() {
@@ -91,12 +150,14 @@ export class KeyTyper {
     this.pending = [];
   }
 
-  // Take a suggestion chip: it replaces the word being typed, then a space.
+  // Take a chip. Picking the exact typed letters teaches the keyboard that word.
   pick(word) {
+    if (this.pending.length && word === this.exactCase(this.typedWord()) && this.dec.idOf(word.toLowerCase()) < 0) this.learn([word]);
     this.pending = [];
     this.committed += word + " ";
+    this.raw = false;
     if (this.shift === "once") this.shift = "off";
   }
 
-  text() { return this.committed + this.typedWord(); }
+  text() { return this.committed + this.exactCase(this.typedWord()); }
 }
