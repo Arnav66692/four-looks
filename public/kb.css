@@ -466,3 +466,6 @@ body.mousemode #dock {
 #dock button:active, #dock button.pressed { transform: scale(.92); }
 #dock button svg { display: block; width: 100%; height: 100%; }
 .key[data-key="mouse"] { font-size: clamp(11px, 1.1vw, 15px); }
+
+/* the cursor glides from key to key instead of floating free */
+#cursor { transition: transform 90ms cubic-bezier(.2, .8, .2, 1); }

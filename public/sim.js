@@ -5,7 +5,9 @@
 
 const HZ = 33;
 const POSE_X = 0.30, POSE_Y = 0.22;        // radians of head turn per screen width / height
-const JITTER = 0.0012;                     // radians of tremor
+const Q = new URLSearchParams(location.search);
+const JITTER = Number(Q.get("noise") || 0.0012);   // radians of tremor (a real face measured nearer 0.004)
+const SPIKE = Number(Q.get("spike") || 0);         // chance per frame of a single-frame jump of 5 times the tremor
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(2 * Math.PI * Math.random());
 
@@ -30,7 +32,8 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     const drift = level.smile > 0.3 ? 0.004 : 0;          // the head shifts a little during a smile
     // Slouching: once typing starts, the whole head slowly settles down and to one side.
     const bias = DRIFT && driftStart != null ? (DRIFT * (performance.now() - driftStart)) / 60000 : 0;
-    const pose = [(0.5 - head.x) * POSE_X + 0.6 * bias + JITTER * gauss(), (0.5 - head.y - dip) * POSE_Y - drift - bias + JITTER * gauss()];
+    const jump = () => (Math.random() < SPIKE ? 5 * JITTER * (Math.random() < 0.5 ? -1 : 1) : 0);
+    const pose = [(0.5 - head.x) * POSE_X + 0.6 * bias + JITTER * gauss() + jump(), (0.5 - head.y - dip) * POSE_Y - drift - bias + JITTER * gauss() + jump()];
     onFrame({ t: performance.now(), head: [0, 0], pose, scores, face: true });
   }, HZ);
 

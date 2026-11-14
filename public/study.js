@@ -107,9 +107,9 @@ export async function runStudy(app) {
 // ---------------------------------------------------------------------------------------------
 const GAINS = [0.7, 1.0, 1.4];
 const SMOOTHING = {
-  light: { minCutoff: 0.8, beta: 3.0, deadzone: 0.003 },
-  medium: { minCutoff: 0.35, beta: 2.2, deadzone: 0.005 },
-  heavy: { minCutoff: 0.15, beta: 1.2, deadzone: 0.009 },
+  light: { aMin: 0.12, band: 0.007, full: 0.03, deadzone: 0.002 },
+  medium: { aMin: 0.05, band: 0.010, full: 0.04, deadzone: 0.003 },
+  heavy: { aMin: 0.03, band: 0.014, full: 0.06, deadzone: 0.004 },
 };
 const TUNE_SPOTS = [[0.14, 0.22], [0.84, 0.8], [0.5, 0.2], [0.16, 0.82], [0.86, 0.24]];
 const TUNE_HOLD = 500, TUNE_CAP = 4500;

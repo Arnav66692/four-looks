@@ -11,7 +11,7 @@ const params = new URLSearchParams(location.search);
 const DWELL = Number(params.get("dwell") || 1000);     // ms on a key to press it
 const CUE_KEY = "fourlooks.cue.v1";                     // which face move presses, with its per-person line and length
 const REACH_KEY = "fourlooks.reach.v3";
-const TUNE_KEY = "fourlooks.tune.v1";                   // sensitivity and smoothing found by the tuning run
+const TUNE_KEY = "fourlooks.tune.v2";                   // sensitivity and smoothing found by the tuning run
 const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
 const STICKY = 0.2;                                     // margin (in key sizes) a fresh hover keeps
@@ -19,7 +19,9 @@ const STICKY_LOCKED = 0.45;                             // margin once you have 
 const CORE = 0.2;                                       // the middle of a key: this far in from each edge
 const LOCK_MS = 250;                                    // time to grow from STICKY to STICKY_LOCKED
 const VOTE_MS = 350;                                    // a press goes to the key you were on most in this window
-const MAGNET = 0.35;                                    // how far the drawn cursor leans toward the key centre
+const SWITCH_MS = 90;                                   // a new key takes the selection after the pointer has been in it this long
+let switchTo = null, switchSince = 0;
+const MAGNET = 0.8;                                    // how far the drawn cursor leans toward the key centre
 const PRIOR_POW = 0.5;                                  // how much likely next letters grow their hidden target
 const NOD_AMP = Number(params.get("nod") || 0.3);        // a nod dips at least this much of your calibrated up-down range
 const NOD_START = 0.07;                                 // a dip this big starts the nod clock
@@ -272,6 +274,10 @@ window.fourLooks.offset = () => pointer.offset;
 // The guided test borrows the pointer, the press move and the nod while it runs.
 const study = { capture: false, onPress: null, onNod: null, watchers: new Set() };
 let lastTrace = 0;
+const PRESS_KEY = "fourlooks.presshold.v1";
+const PRESS_STEPS = { quick: 0, normal: 120, slow: 280 };  // extra time the press move must be held, ms
+let pressName = (() => { try { const v = JSON.parse(localStorage.getItem(PRESS_KEY)); return v in PRESS_STEPS ? v : "normal"; } catch { return "normal"; } })();
+let pressExtra = PRESS_STEPS[pressName];
 let phraseRest = [], phraseAt = 0;                         // the rest of the grey phrase, for a second nod
 const DOUBLE_NOD_MS = 1100;
 let pendingFix = null;
@@ -486,7 +492,11 @@ const onlyMenu = (el) => (el && el.closest("#menu") ? el : null);
 function setFill(el, p) { if (el) el.style.setProperty("--p", String(p)); }
 function movePointer(x, y, t) {
   cursorAt = [x, y];
-  const el = pickHover(x, y, t);
+  let el = pickHover(x, y, t);
+  if (el !== hoverEl && hoverEl && el) {            // passing over a key is not selecting it: it must hold for a moment
+    if (el !== switchTo) { switchTo = el; switchSince = t; }
+    if (t - switchSince < SWITCH_MS) el = hoverEl;
+  } else switchTo = null;
   history.push({ t, el, x, y });
   while (history.length && t - history[0].t > VOTE_MS * 2) history.shift();
   let dx = x, dy = y;
@@ -693,7 +703,7 @@ function onFrame(f) {
     const target = intended(blinkSince);       // where you were when the press move started
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && study.capture) { blinkFired = true; study.onPress?.(performance.now()); }
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && mode === "mouse") { blinkFired = true; clickAtRest("press move"); }
-    if (!blinkFired && f.t - blinkSince > cueCfg.ms && target) {
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms + pressExtra && target) {
       blinkFired = true;
       // For studying drift on a real face: where the head was in the camera frame at this press.
       if (f.lm) record("aim", { key: target.el.dataset.key, pose: f.pose.map((v) => +v.toFixed(4)), nose: [+f.lm[1].x.toFixed(4), +f.lm[1].y.toFixed(4)],
@@ -849,8 +859,8 @@ function applyTheme() {
 }
 applyTheme();
 pointer.gain = loadReach() >= 0.4 && loadReach() <= 2.5 ? loadReach() : 1.3;
-let tuned = { name: "medium", smoothing: { minCutoff: 0.35, beta: 2.2, deadzone: 0.005 } };
-try { const t = JSON.parse(localStorage.getItem(TUNE_KEY)); if (t?.smoothing) { tuned = t; pointer.smoothing(t.smoothing); } } catch { /* keep defaults */ }
+let tuned = { name: "medium", smoothing: { aMin: 0.05, band: 0.010, full: 0.04, deadzone: 0.003 } };
+try { const t = JSON.parse(localStorage.getItem(TUNE_KEY)); if (t?.smoothing?.aMin) { tuned = t; pointer.smoothing(t.smoothing); } } catch { /* keep defaults */ }
 // ---------- camera view and admin view ----------
 const flag = (key, fallback) => { try { const v = JSON.parse(localStorage.getItem(key)); return typeof v === "boolean" ? v : fallback; } catch { return fallback; } };
 let camView = flag("fourlooks.camview.v1", true);
@@ -938,6 +948,7 @@ const SETTINGS = [
     cueCfg = { ...DEFAULT_CUE, cue: cycle(CUE_ORDER, cueCfg.cue) }; store(CUE_KEY, cueCfg);
     prompt(`Press move is now ${CUES[cueCfg.cue].name}. Choose Calibrate to fit it to you.`);
   } },
+  { id: "presshold", label: "Press hold", value: () => pressName, run: () => { const names = Object.keys(PRESS_STEPS); pressName = names[(names.indexOf(pressName) + 1) % names.length]; pressExtra = PRESS_STEPS[pressName]; store(PRESS_KEY, pressName); } },
   { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = REACH_STEPS.includes(pointer.gain) ? cycle(REACH_STEPS, pointer.gain) : 1; store(REACH_KEY, pointer.gain); } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },

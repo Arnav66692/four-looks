@@ -43,23 +43,38 @@ function fitAffine(poses, targets) {
   return [coef(0), coef(1)];
 }
 
+// Steady filter. First a median of the last three samples removes single-frame jumps. Then the
+// smoothing depends on how far the head has moved from where the cursor sits: inside the tremor band
+// the cursor barely moves, and once the head has clearly moved the cursor follows it directly.
+class Steady {
+  constructor(aMin = 0.05, band = 0.010, full = 0.04) { Object.assign(this, { aMin, band, full, y: null, buf: [] }); }
+  filter(x) {
+    this.buf.push(x); if (this.buf.length > 3) this.buf.shift();
+    const m = [...this.buf].sort((a, b) => a - b)[Math.floor(this.buf.length / 2)];
+    if (this.y == null) { this.y = m; return m; }
+    const k = Math.min(1, Math.max(0, (Math.abs(m - this.y) - this.band) / (this.full - this.band)));
+    this.y += (this.aMin + (1 - this.aMin) * k * k) * (m - this.y);
+    return this.y;
+  }
+}
+
 export class HeadPointer {
   // Heavy smoothing when the head is nearly still, light smoothing when it moves fast.
   // deadzone: moves smaller than this (screen units) are ignored, so a still head gives a still cursor.
-  constructor({ minCutoff = 0.35, beta = 2.2, deadzone = 0.005, gain = 1 } = {}) {
+  constructor({ aMin = 0.05, band = 0.010, full = 0.04, deadzone = 0.003, gain = 1 } = {}) {
     this.map = null;           // affine map, from the older many-dot calibration
     this.range = null;         // the person's own comfortable range: { c, left, right, up, down, area }
-    this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
+    this.fx = new Steady(aMin, band, full); this.fy = new Steady(aMin, band, full);
     this.deadzone = deadzone; this.gain = gain; this.shown = null;
     this.offset = [0, 0];      // slides when the head pushes past an edge or on recenter, in screen units
   }
   get ready() { return !!(this.map || this.range); }
 
   // Change how much the cursor is smoothed. Restarts the filters so the change is felt at once.
-  smoothing({ minCutoff, beta, deadzone }) {
-    this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
+  smoothing({ aMin = 0.05, band = 0.010, full = 0.04, deadzone = 0.003 } = {}) {
+    this.fx = new Steady(aMin, band, full); this.fy = new Steady(aMin, band, full);
     this.deadzone = deadzone; this.shown = null;
-    this.smooth = { minCutoff, beta, deadzone };
+    this.smooth = { aMin, band, full, deadzone };
   }
 
   // poses: head pose samples (means). targets: matching points in 0..1 screen units.
@@ -118,7 +133,7 @@ export class HeadPointer {
       if (over) { this.offset[k] = Math.max(-OFFSET_CAP, Math.min(OFFSET_CAP, this.offset[k] - over)); raw[k] -= over; }
     }
     const clamp = (x) => Math.min(1, Math.max(0, x));
-    const p = [clamp(this.fx.filter(raw[0], t)), clamp(this.fy.filter(raw[1], t))];
+    const p = [clamp(this.fx.filter(raw[0])), clamp(this.fy.filter(raw[1]))];
     if (this.shown && Math.hypot(p[0] - this.shown[0], p[1] - this.shown[1]) < this.deadzone) return this.shown;
     this.shown = p;
     return p;

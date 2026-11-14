@@ -9,6 +9,8 @@ if (!app.requestSingleInstanceLock()) {
   process.stdout.write("four looks is already running. Quit that one first (Control+Option+Q).\n");
   app.exit(0);
 }
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 process.env.PORT = process.env.PORT || "5174";
 await import("../server.js");
 
@@ -92,7 +94,8 @@ async function createWindow() {
     x: workArea.x, y: workArea.y + workArea.height - height, width: workArea.width, height,
     alwaysOnTop: true, focusable: false, frame: false, hasShadow: true, resizable: false,
     backgroundColor: "#ecebe7",
-    webPreferences: { preload: fileURLToPath(new URL("./preload.cjs", import.meta.url)) },
+    // The window never takes focus, and Chromium slows down unfocused pages. Keep the camera loop at full speed.
+    webPreferences: { preload: fileURLToPath(new URL("./preload.cjs", import.meta.url)), backgroundThrottling: false },
   });
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
