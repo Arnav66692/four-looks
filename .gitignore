@@ -5,3 +5,4 @@ public/lm.json
 .env
 native/bin/
 native/.build/
+.usage.json

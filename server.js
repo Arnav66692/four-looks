@@ -2,7 +2,7 @@
 // Secrets come from .env (never committed, never sent to the page).
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,34 @@ function loadEnv() {
   } catch { /* no .env yet */ }
 }
 loadEnv();
+
+// ---------- spend guard: the app stops calling Grok at these limits, whatever the account allows ----------
+const USAGE_FILE = join(ROOT, ".usage.json");
+const MAX_USD = Number(process.env.FL_MAX_USD || 1);                 // lifetime estimate, in dollars
+const MAX_CALLS_PER_DAY = Number(process.env.FL_MAX_CALLS_PER_DAY || 300);
+const PRICE_PER_M = { "grok-4.3": [1.25, 2.5] };                     // dollars per million input, output tokens (xAI pricing page, Nov 14 2026)
+const FALLBACK_PRICE = [2, 6];
+const today = () => new Date().toISOString().slice(0, 10);
+function loadUsage() {
+  try { return JSON.parse(readFileSync(USAGE_FILE, "utf8")); } catch { return { usd: 0, calls: 0, inTokens: 0, outTokens: 0, day: "", callsToday: 0 }; }
+}
+function overBudget() {
+  const u = loadUsage();
+  if (u.usd >= MAX_USD) return "spend cap reached (about $" + u.usd.toFixed(3) + " of $" + MAX_USD + ")";
+  if (u.day === today() && u.callsToday >= MAX_CALLS_PER_DAY) return "daily call cap reached (" + MAX_CALLS_PER_DAY + ")";
+  return null;
+}
+function addUsage(model, usage) {
+  const u = loadUsage();
+  const [pin, pout] = PRICE_PER_M[model] || FALLBACK_PRICE;
+  const inT = usage?.prompt_tokens ?? usage?.input_tokens ?? 0, outT = usage?.completion_tokens ?? usage?.output_tokens ?? 0;
+  const next = {
+    usd: u.usd + (inT * pin + outT * pout) / 1e6, calls: u.calls + 1, inTokens: u.inTokens + inT, outTokens: u.outTokens + outT,
+    day: today(), callsToday: (u.day === today() ? u.callsToday : 0) + 1,
+  };
+  writeFileSync(USAGE_FILE, JSON.stringify(next));
+  return next;
+}
 
 let grokModel = process.env.XAI_MODEL || null;
 async function pickModel(key) {
@@ -41,15 +69,19 @@ If the text is already fine, return it unchanged. Reply with the corrected text 
 async function grokFix(text) {
   const key = process.env.XAI_API_KEY;
   if (!key) return { ok: false, error: "no key" };
+  const blocked = overBudget();
+  if (blocked) return { ok: false, error: blocked };
   const model = await pickModel(key);
   const r = await fetch(`${XAI}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({ model, temperature: 0, max_tokens: 300, messages: [{ role: "system", content: FIX_PROMPT }, { role: "user", content: text }] }),
   });
-  if (!r.ok) return { ok: false, error: `Grok replied ${r.status}` };
-  const out = (await r.json()).choices?.[0]?.message?.content?.trim();
-  return out ? { ok: true, text: out, model } : { ok: false, error: "empty reply" };
+  if (!r.ok) return { ok: false, error: `Grok replied ${r.status}: ${(await r.text()).slice(0, 160)}` };
+  const body = await r.json();
+  const spent = addUsage(model, body.usage);
+  const out = body.choices?.[0]?.message?.content?.trim();
+  return out ? { ok: true, text: out, model, spentUsd: +spent.usd.toFixed(4) } : { ok: false, error: "empty reply" };
 }
 
 function readBody(req) {
@@ -70,6 +102,11 @@ createServer(async (req, res) => {
       result = typeof text === "string" && text.trim() && text.length <= MAX_TEXT ? await grokFix(text.trim()) : { ok: false, error: "bad text" };
     } catch (err) { result = { ok: false, error: err instanceof Error ? err.message : "failed" }; }
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
+    return;
+  }
+  if (url === "/api/usage") {
+    const u = loadUsage();
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...u, usd: +u.usd.toFixed(4), capUsd: MAX_USD, capCallsPerDay: MAX_CALLS_PER_DAY }));
     return;
   }
   const rel = url === "/" ? "public/index.html" : url.startsWith("/src/") ? url.slice(1) : join("public", url);
