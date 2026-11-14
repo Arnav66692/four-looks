@@ -121,11 +121,15 @@ export function startMouse(options = {}) {
     }
     while (!blocked && outgoing.length) {
       const entry = outgoing[0];
+      // AX walks can outlast ordinary command timeouts; keep them as queue barriers.
+      if (pending.some((item) => item.op === 'ax_list')
+        || (entry.op === 'ax_list' && pending.length)) break;
       // One move in flight plus one replaceable unsent move bounds move traffic.
       if (entry.op === 'move' && pending.some((item) => item.op === 'move')) break;
       outgoing.shift();
       if (waitingMove === entry) waitingMove = null;
       pending.push(entry);
+      for (const waiter of entry.waiters) waiter.start();
       try { blocked = !child.stdin.write(entry.line); } catch (error) {
         reset(new Error(`flmouse write failed: ${error.message}`));
         return;
@@ -141,7 +145,7 @@ export function startMouse(options = {}) {
     });
   }
 
-  function command(op, fields = {}) {
+  function command(op, fields = {}, timeoutMs = TIMEOUT_MS) {
     if (buildError) return Promise.reject(buildError);
     let line;
     try { line = `${JSON.stringify({ op, ...fields })}\n`; } catch (error) {
@@ -157,21 +161,17 @@ export function startMouse(options = {}) {
       }
       const waiter = { resolve, reject, timer: null };
       entry.waiters.add(waiter);
-      waiter.timer = setTimeout(() => {
-        entry.waiters.delete(waiter);
-        const error = new Error(`flmouse ${op} timed out after ${TIMEOUT_MS}ms`);
-        reject(error);
-        if (entry.waiters.size) return;
-        if (pending.includes(entry)) {
-          // Reset the stream on a stalled reply so late replies cannot be misattributed.
+      // Queued commands must not time out while an earlier AX walk is still running.
+      waiter.start = () => {
+        waiter.timer = setTimeout(() => {
+          entry.waiters.delete(waiter);
+          const error = new Error(`flmouse ${op} timed out after ${timeoutMs}ms`);
+          reject(error);
+          if (entry.waiters.size) return;
+          // Reset the stream so late replies cannot be misattributed.
           reset(error);
-        } else {
-          const index = outgoing.indexOf(entry);
-          if (index !== -1) outgoing.splice(index, 1);
-          if (waitingMove === entry) waitingMove = null;
-          schedule();
-        }
-      }, TIMEOUT_MS);
+        }, timeoutMs);
+      };
       schedule();
     });
   }
@@ -186,6 +186,8 @@ export function startMouse(options = {}) {
     ping: () => command('ping'),
     screen: () => command('screen'),
     pos: () => command('pos'),
+    axList: ({ max = 60, budgetMs = 350 } = {}) =>
+      command('ax_list', { max, budget_ms: budgetMs }, budgetMs + 1500),
     move: (x, y) => command('move', { x, y }),
     click: (button = 'left', count = 1) => command('click', { button, count }),
     down: (button = 'left') => command('down', { button }),

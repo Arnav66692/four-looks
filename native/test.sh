@@ -9,8 +9,8 @@ import CoreFoundation
 let names = ["ping", "screen", "pos", "move", "click", "bad command", "malformed JSON",
              "down", "drag move", "up", "right double click", "scroll", "key",
              "bad coordinate", "bad count", "bad modifier", "bad key code", "bad button",
-             "non-object", "final ping"]
-let failures: Set<Int> = [5, 6, 13, 14, 15, 16, 17, 18]
+             "non-object", "final ping", "ax_list", "ax_list capped", "bad AX max", "bad AX budget"]
+let failures: Set<Int> = [5, 6, 13, 14, 15, 16, 17, 18, 22, 23]
 var index = 0
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
@@ -35,6 +35,23 @@ while let line = readLine() {
     if index == 2 {
         guard let x = reply["x"] as? Double, x.isFinite,
               let y = reply["y"] as? Double, y.isFinite else { fail("invalid cursor position") }
+    }
+    if index == 20 || index == 21 {
+        guard reply["app"] is String, reply["window"] is String,
+              let elements = reply["elements"] as? [[String: Any]], elements.count == (index == 20 ? 3 : 1),
+              let truncated = reply["truncated"] as? NSNumber, CFGetTypeID(truncated) == CFBooleanGetTypeID(),
+              truncated.boolValue == (index == 21),
+              let ms = reply["ms"] as? Double, ms.isFinite, ms >= 0 else { fail("invalid AX reply shape") }
+        for (offset, element) in elements.enumerated() {
+            guard element["id"] as? Int == offset + 1, element["role"] is String, element["name"] is String else {
+                fail("invalid AX identity")
+            }
+            for key in ["x", "y", "w", "h"] {
+                guard let value = element[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+                      value.doubleValue.isFinite else { fail("invalid AX geometry") }
+            }
+        }
+        guard elements[0]["x"] as? Int == 990, elements[0]["y"] as? Int == 330 else { fail("expected centre coordinates") }
     }
     print("PASS \(names[index])")
     index += 1
@@ -65,5 +82,9 @@ not JSON
 {"op":"down","button":"right"}
 []
 {"op":"ping"}
+{"op":"ax_list","max":60,"budget_ms":350}
+{"op":"ax_list","max":1}
+{"op":"ax_list","max":false}
+{"op":"ax_list","budget_ms":0}
 JSON
 "$NATIVE_DIR/.build/check-replies" < "$NATIVE_DIR/.build/replies.jsonl"

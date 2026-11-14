@@ -83,6 +83,7 @@ ipcMain.handle("four-looks:focus-role", () => new Promise((resolve) => {
 // search, draft an email) take a fast path with no model call. Anything that sends, buys or deletes
 // waits for the person's nod. Grok has its own cursor, drawn in a click-through window over the screen.
 // =====================================================================================
+const FAST_GROK = "grok-4.20-0309-non-reasoning";
 const SHOT_WIDTH = 1280;               // screenshots are scaled down to this width: smaller uploads, faster answers
 const CONFIRM_MS = 15000;              // no nod within this long counts as no
 let agentBusy = null, overlay = null, confirmSeq = 0, visionModel = null;
@@ -133,12 +134,21 @@ ipcMain.handle("four-looks:agent-run", async (e, goal) => {
     const key = process.env.XAI_API_KEY || "";
     const ask = async (messages, tools) => {
       if (!key) throw new Error("Grok is off. Add XAI_API_KEY to four-looks/.env and start again");
-      visionModel ||= await xai.chooseVisionModel(key);
-      return (await xai.askGrok({ key, model: visionModel, messages, tools })).message;
+      // The fastest model measured (see electron/xai.js) is used straight away: asking the API for its
+      // model list first cost a round trip on every start, and once timed out for 20 seconds.
+      visionModel ||= process.env.XAI_VISION_MODEL || FAST_GROK;
+      try { return (await xai.askGrok({ key, model: visionModel, messages, tools })).message; }
+      catch (err) {
+        if (visionModel !== FAST_GROK || !/HTTP 4(00|04)|model/i.test(String(err?.message))) throw err;
+        visionModel = await xai.chooseVisionModel(key);          // that model is gone for this key: pick from the list once
+        return (await xai.askGrok({ key, model: visionModel, messages, tools })).message;
+      }
     };
     showOverlay();
     const agent = createAgent({
       mouse: hands, ask, screenshot: takeScreenshot,
+      // The named controls of the app in front, from the accessibility tree: Grok reads these before any screenshot.
+      elements: () => hands.axList({ max: 60, budgetMs: 400 }),
       screenSize: screen.getPrimaryDisplay().bounds,
       typeText: (text) => typeIntoFrontApp(text, false),
       openUrl: (url) => (/^https?:\/\//i.test(url) ? shell.openExternal(url) : Promise.reject(new Error("Only web links can be opened"))),
