@@ -2,6 +2,7 @@
 // Runs in the browser and in Node. Scores are log10.
 
 export const SPEED_GROUPS = ["abcdef", "ghijklm", "nopqrs", "tuvwxyz"];
+export const LETTER_GROUPS = [..."abcdefghijklmnopqrstuvwxyz"];
 export const BOX_COUNT = 4;
 
 const LOG10 = Math.log(10);
@@ -19,13 +20,13 @@ export function codeOf(word, boxOf) {
 }
 
 // A confusion table C[intended][observed]. Starts close to identity and is refit per person.
-export function defaultConfusion(slip = 0.0001) {
-  return Array.from({ length: BOX_COUNT }, (_, i) =>
-    Array.from({ length: BOX_COUNT }, (_, j) => (i === j ? 1 - slip : slip / (BOX_COUNT - 1))));
+export function defaultConfusion(slip = 0.0001, n = BOX_COUNT) {
+  return Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) => (i === j ? 1 - slip : slip / (n - 1))));
 }
 
 export class Decoder {
-  constructor(model, { groups = SPEED_GROUPS, confusion = defaultConfusion() } = {}) {
+  constructor(model, { groups = SPEED_GROUPS, confusion = null } = {}) {
     this.words = model.words;
     this.uni = Float64Array.from(model.uni);
     this.backoff = Float64Array.from(model.backoff);
@@ -38,7 +39,7 @@ export class Decoder {
     }
     this.index = new Map(this.words.map((w, i) => [w, i]));
     this.setGroups(groups);
-    this.confusion = confusion;
+    this.confusion = confusion || defaultConfusion(0.0001, groups.length);
   }
 
   setGroups(groups) {
@@ -61,16 +62,17 @@ export class Decoder {
     return bo + this.uni[w];
   }
 
-  // slots: one entry per letter, each a probability array over the 4 boxes.
+  // slots: one entry per letter, each a probability array over the groups (4 boxes or 26 keys).
   // Channel: P(signal | intended box c) = sum over observed o of C[c][o] * p[o].
   decodeWord(slots, history = -1, { top = 5, lmWeight = 1 } = {}) {
     const ids = this.byLength.get(slots.length);
     if (!ids) return [];
+    const n = this.groups.length;
     const channel = slots.map((p) => {
-      const row = new Float64Array(BOX_COUNT);
-      for (let c = 0; c < BOX_COUNT; c++) {
+      const row = new Float64Array(n);
+      for (let c = 0; c < n; c++) {
         let s = 0;
-        for (let o = 0; o < BOX_COUNT; o++) s += this.confusion[c][o] * p[o];
+        for (let o = 0; o < n; o++) s += this.confusion[c][o] * p[o];
         row[c] = Math.log(Math.max(s, 1e-9)) / LOG10;
       }
       return row;
@@ -118,6 +120,6 @@ export class Decoder {
 }
 
 // A hard pick as a probability array, for keys and switches.
-export function hardSlot(box) {
-  return Array.from({ length: BOX_COUNT }, (_, i) => (i === box ? 1 : 0));
+export function hardSlot(box, n = BOX_COUNT) {
+  return Array.from({ length: n }, (_, i) => (i === box ? 1 : 0));
 }

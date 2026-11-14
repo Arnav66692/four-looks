@@ -6,6 +6,13 @@ const MODEL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/f
 
 const NOSE = 1, EYE_L = 33, EYE_R = 263;
 
+// Where the face points: yaw and pitch in radians, from the 3D head rotation (column-major 4x4).
+function poseOf(m) {
+  if (!m) return null;
+  const fx = m[8], fy = m[9], fz = m[10];
+  return [Math.atan2(fx, fz), Math.atan2(fy, Math.hypot(fx, fz))];
+}
+
 export async function startFace(video, onFrame) {
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
   video.srcObject = stream;
@@ -16,6 +23,7 @@ export async function startFace(video, onFrame) {
     runningMode: "VIDEO",
     numFaces: 1,
     outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: true,
   });
   let last = -1;
   const loop = () => {
@@ -30,7 +38,7 @@ export async function startFace(video, onFrame) {
         const head = [(lm[NOSE].x - mid.x) / eye, (lm[NOSE].y - mid.y) / eye];
         const scores = {};
         for (const c of r.faceBlendshapes?.[0]?.categories || []) scores[c.categoryName] = c.score;
-        onFrame({ t, head, scores, face: true });
+        onFrame({ t, head, pose: poseOf(r.facialTransformationMatrixes?.[0]?.data), scores, face: true });
       } else {
         onFrame({ t, head: null, scores: {}, face: false });
       }

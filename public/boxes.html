@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Four Looks</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="stage">
+    <div class="box" id="box0" data-box="0"><span class="letters">a b c d e f</span><i class="bar"></i></div>
+    <div class="box" id="box1" data-box="1"><span class="letters">g h i j k l m</span><i class="bar"></i></div>
+    <div class="box" id="box2" data-box="2"><span class="letters">n o p q r s</span><i class="bar"></i></div>
+    <div class="box" id="box3" data-box="3"><span class="letters">t u v w x y z</span><i class="bar"></i></div>
+
+    <section id="center">
+      <p id="prompt">loading the word model</p>
+      <div id="slots"></div>
+      <div id="chips"></div>
+      <p id="sentence"></p>
+      <ul id="alts"></ul>
+    </section>
+  </main>
+
+  <aside id="cam">
+    <video id="video" playsinline muted></video>
+    <canvas id="dot" width="120" height="90"></canvas>
+    <p id="status">camera off</p>
+  </aside>
+
+  <footer id="help">
+    <span><b>turn head</b> pick a box</span>
+    <span><b>hold blink</b> end word</span>
+    <span><b>open mouth</b> undo or next guess</span>
+    <span><b>raise brows</b> speak</span>
+    <button id="start">start camera</button>
+    <button id="calibrate">calibrate</button>
+  </footer>
+
+  <script type="module" src="boxes.js"></script>
+</body>
+</html>

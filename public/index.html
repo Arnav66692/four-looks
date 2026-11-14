@@ -4,39 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Four Looks</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="kb.css">
 </head>
 <body>
-  <main id="stage">
-    <div class="box" id="box0" data-box="0"><span class="letters">a b c d e f</span><i class="bar"></i></div>
-    <div class="box" id="box1" data-box="1"><span class="letters">g h i j k l m</span><i class="bar"></i></div>
-    <div class="box" id="box2" data-box="2"><span class="letters">n o p q r s</span><i class="bar"></i></div>
-    <div class="box" id="box3" data-box="3"><span class="letters">t u v w x y z</span><i class="bar"></i></div>
-
-    <section id="center">
-      <p id="prompt">loading the word model</p>
-      <div id="slots"></div>
-      <div id="chips"></div>
-      <p id="sentence"></p>
-      <ul id="alts"></ul>
-    </section>
-  </main>
-
-  <aside id="cam">
-    <video id="video" playsinline muted></video>
-    <canvas id="dot" width="120" height="90"></canvas>
-    <p id="status">camera off</p>
-  </aside>
-
-  <footer id="help">
-    <span><b>turn head</b> pick a box</span>
-    <span><b>hold blink</b> end word</span>
-    <span><b>open mouth</b> undo or next guess</span>
-    <span><b>raise brows</b> speak</span>
+  <header id="top">
+    <div id="textbox" aria-live="polite"><span id="done"></span><span id="typing"></span><i id="caret"></i></div>
+    <aside id="cam">
+      <video id="video" playsinline muted></video>
+      <p id="status">camera off</p>
+    </aside>
+  </header>
+  <nav id="chips"></nav>
+  <main id="keys"></main>
+  <footer id="bar">
+    <p id="prompt">loading the word model</p>
     <button id="start">start camera</button>
     <button id="calibrate">calibrate</button>
+    <a href="/boxes.html">4 box mode</a>
   </footer>
-
-  <script type="module" src="app.js"></script>
+  <div id="cursor"><svg viewBox="0 0 44 44"><circle cx="22" cy="22" r="18" class="track"/><circle cx="22" cy="22" r="18" class="fill" id="ring"/></svg></div>
+  <div id="target"></div>
+  <script type="module" src="kb.js"></script>
 </body>
 </html>
