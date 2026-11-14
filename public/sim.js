@@ -19,13 +19,18 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   const level = { smile: 0, blink: 0, mouth: 0, pucker: 0, brows: 0 };
   let dip = 0;                              // extra downward pitch, for nods
   let auto = true;                          // follow calibration prompts like a person
+  const DRIFT = Number(new URLSearchParams(location.search).get("drift") || 0);   // posture drift, radians per minute
+  let driftStart = null;
+  const LAZY = new URLSearchParams(location.search).get("lazy") === "1";
 
   setInterval(() => {
     if (auto) follow();
     const scores = {};
     for (const [name, keys] of Object.entries(SCORES)) for (const k of keys) scores[k] = Math.min(1, Math.max(0, level[name] + 0.04 + 0.015 * gauss()));
     const drift = level.smile > 0.3 ? 0.004 : 0;          // the head shifts a little during a smile
-    const pose = [(0.5 - head.x) * POSE_X + JITTER * gauss(), (head.y + dip - 0.5) * POSE_Y + drift + JITTER * gauss()];
+    // Slouching: once typing starts, the whole head slowly settles down and to one side.
+    const bias = DRIFT && driftStart != null ? (DRIFT * (performance.now() - driftStart)) / 60000 : 0;
+    const pose = [(0.5 - head.x) * POSE_X + 0.6 * bias + JITTER * gauss(), (head.y + dip - 0.5) * POSE_Y + drift + bias + JITTER * gauss()];
     onFrame({ t: performance.now(), head: [0, 0], pose, scores, face: true });
   }, HZ);
 
@@ -69,6 +74,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       if (!c) break;
       const ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
       if (Math.abs(ex) * innerWidth < r.width * 0.2 && Math.abs(ey) * innerHeight < r.height * 0.2) break;
+      if (LAZY && document.querySelector(".hover") === el) break;        // most people stop as soon as the key lights up
       const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1;   // people adapt to how far the cursor travels
       head.x += (0.3 * ex) / g; head.y += (0.3 * ey) / g;
       await sleep(HZ * 3);
@@ -91,6 +97,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   const tally = { presses: 0, reAims: 0, gaveUp: 0, wrongKey: 0 };
   const findKey = (key) => [...document.querySelectorAll("[data-key]")].find((e) => e.dataset.key === key || e.dataset.word === key);
   async function press(key) {
+    if (driftStart == null) driftStart = performance.now();
     let aimed = false;
     for (let tries = 0; tries < 4 && !aimed; tries++) {
       await lookAtKey(key, tries ? 0.05 : 0.12);
@@ -98,6 +105,9 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       if (!aimed) tally.reAims++;
     }
     if (!aimed) tally.gaveUp++;
+    // Effort: how far the head must be held away from where it would point with no drift.
+    const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1, c = window.fourLooks.cursor && window.fourLooks.cursor();
+    if (c) (tally.holdOff ||= []).push(Math.round(Math.hypot((c[0] / innerWidth - (0.5 + g * (head.x - 0.5))) * innerWidth, (c[1] / innerHeight - (0.5 + g * (head.y - 0.5))) * innerHeight)));
     const n0 = window.fourLooks.log.length;
     await cue();
     tally.presses++;

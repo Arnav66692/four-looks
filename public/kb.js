@@ -214,6 +214,7 @@ function acceptGhost(how) {
 }
 
 // ---------- Grok check: grammar and sense, through the local server (needs XAI_API_KEY in .env) ----------
+window.fourLooks.offset = () => pointer.offset;
 let pendingFix = null;
 let lastPress = null;                  // top letters of the last key press, for the admin view
 async function askFix() {
@@ -463,7 +464,8 @@ function detectNod(f) {
 }
 
 // ---------- camera ----------
-let blinkSince = null, blinkFired = false, eyesShutSince = null;
+let blinkSince = null, blinkFired = false, eyesShutSince = null, recentered = false;
+const RECENTER_MS = 1100;               // eyes closed this long: the way you face now becomes the middle of the keyboard
 function onFrame(f) {
   lastFrame = f;
   watchers.forEach((w) => w(f));
@@ -475,8 +477,13 @@ function onFrame(f) {
   if (adminOn && admin) drawAdmin(f, c);
   const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
   if (shut && !calibrating) {
-    if (eyesShutSince == null) eyesShutSince = f.t;
+    if (eyesShutSince == null) { eyesShutSince = f.t; recentered = false; }
     else if (f.t - eyesShutSince > 3000) { eyesShutSince = null; toggleMenu(false); calibrate(); return; }
+    else if (!recentered && f.t - eyesShutSince > RECENTER_MS && pointer.ready) {
+      recentered = true;
+      const k = document.querySelector('#keys [data-key="g"]')?.getBoundingClientRect();      // the middle of the keyboard
+      if (pointer.recenter(f.pose, k ? (k.left + k.width / 2) / innerWidth : 0.5, k ? (k.top + k.height / 2) / innerHeight : 0.5)) { record("recenter"); tick(); prompt("Recentered."); }
+    }
   } else eyesShutSince = null;
   if (!f.face || calibrating || !pointer.ready) return;
   const closing = c > cueCfg.freeze;
@@ -490,6 +497,9 @@ function onFrame(f) {
     const target = intended(blinkSince);       // where you were when the press move started
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && target) {
       blinkFired = true;
+      // For studying drift on a real face: where the head was in the camera frame at this press.
+      if (f.lm) record("aim", { key: target.el.dataset.key, pose: f.pose.map((v) => +v.toFixed(4)), nose: [+f.lm[1].x.toFixed(4), +f.lm[1].y.toFixed(4)],
+        eyes: +Math.hypot(f.lm[33].x - f.lm[263].x, f.lm[33].y - f.lm[263].y).toFixed(4), cursor: [Math.round(target.x), Math.round(target.y)], offset: pointer.offset.map((v) => +v.toFixed(3)) });
       press(target.el, target.x, target.y);
       hoverSince = f.t; armed = false;
     }
@@ -654,8 +664,12 @@ const SETTINGS = [
   ...(window.fourLooksOut?.quit ? [{ id: "quit", label: "Quit", value: () => "", run: () => window.fourLooksOut.quit() }] : []),
   { id: "close", label: "Close menu", value: () => "", run: () => toggleMenu(false) },
 ];
+if (window.fourLooksOut?.quit) {            // a plain close button, for the mouse only so a head move cannot quit
+  $("close").hidden = false;
+  $("close").addEventListener("mousedown", (e) => { e.stopPropagation(); window.fourLooksOut.quit(); });
+}
 function buildMenu() {
-  $("menu").innerHTML = `<p class="hint">Close your eyes for 3 seconds to recalibrate at any time.</p>` + SETTINGS.map((it, i) =>
+  $("menu").innerHTML = `<p class="hint">Eyes closed 1 second recentres the cursor. 3 seconds recalibrates.</p>` + SETTINGS.map((it, i) =>
     `<div class="tile" data-key="set:${it.id}" style="--i:${i}"><span class="name">${it.label}</span><span class="val"></span></div>`).join("");
   refreshMenu();
 }

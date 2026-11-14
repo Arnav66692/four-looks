@@ -1,6 +1,9 @@
 // Head pointer: head pose -> smoothed screen point. Per person: an affine map fitted from
 // a center look plus four corner looks, then a One Euro filter for jitter.
 
+const EDGE = 0.04;          // how far past the screen edge the head may point before the mapping slides
+const OFFSET_CAP = 0.8;     // most the mapping may slide, in screen units
+
 class OneEuro {
   constructor(minCutoff = 1.2, beta = 0.02, dCutoff = 1.0) {
     Object.assign(this, { minCutoff, beta, dCutoff, x: null, dx: 0, t: null });
@@ -46,17 +49,33 @@ export class HeadPointer {
   constructor({ minCutoff = 0.35, beta = 2.2, deadzone = 0.005, gain = 1 } = {}) {
     this.map = null; this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
     this.deadzone = deadzone; this.gain = gain; this.shown = null;
+    this.offset = [0, 0];      // slow correction for posture drift, in screen units, learned from presses
+  }
+
+  // Recenter: make the direction the head points right now land on this screen point.
+  recenter(pose, x = 0.5, y = 0.5) {
+    if (!this.map || !pose) return false;
+    const at = this.map.map((row) => 0.5 + this.gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
+    this.offset = [x - at[0], y - at[1]];
+    this.shown = null;
+    return true;
   }
   get ready() { return !!this.map; }
 
   // poses: head pose samples (means). targets: matching points in 0..1 screen units.
-  fit(poses, targets) { this.map = fitAffine(poses, targets); }
+  fit(poses, targets) { this.map = fitAffine(poses, targets); this.offset = [0, 0]; }
 
   // Pose -> point in 0..1 screen units, smoothed and clamped.
   point(pose, t) {
     if (!this.map || !pose) return null;
     const v = [pose[0], pose[1], 1];
-    const raw = this.map.map((row) => 0.5 + this.gain * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] - 0.5));
+    const raw = this.map.map((row, k) => 0.5 + this.gain * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] - 0.5) + this.offset[k]);
+    // Edge re-centering: turning past the edge slides the mapping along, so turning back moves the
+    // cursor straight away. This sheds whatever offset posture has built up.
+    for (let k = 0; k < 2; k++) {
+      const over = raw[k] < -EDGE ? raw[k] + EDGE : raw[k] > 1 + EDGE ? raw[k] - 1 - EDGE : 0;
+      if (over) { this.offset[k] = Math.max(-OFFSET_CAP, Math.min(OFFSET_CAP, this.offset[k] - over)); raw[k] -= over; }
+    }
     const clamp = (x) => Math.min(1, Math.max(0, x));
     const p = [clamp(this.fx.filter(raw[0], t)), clamp(this.fy.filter(raw[1], t))];
     if (this.shown && Math.hypot(p[0] - this.shown[0], p[1] - this.shown[1]) < this.deadzone) return this.shown;
@@ -68,7 +87,7 @@ export class HeadPointer {
   // gain 1 means "in units of the person's own calibrated range", whatever the reach setting is.
   raw(pose, gain = this.gain) {
     if (!this.map || !pose) return null;
-    return this.map.map((row) => 0.5 + gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
+    return this.map.map((row, k) => 0.5 + gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5) + (gain === 1 ? 0 : this.offset[k]));
   }
 
   toJSON() { return { map: this.map }; }
