@@ -18,6 +18,21 @@ export class KeyTyper {
     this.shift = "once";     // off | once | lock. Starts capitalised.
     this.raw = false;        // inside an email, link, tag, time or number
     this.learned = new Set();
+    this.undoStack = [];
+    this.lastFix = null;     // { from, to } when autocorrect last changed a word
+  }
+
+  // Undo support: call save() before a change, undo() to step back.
+  save() {
+    this.undoStack.push({ committed: this.committed, pending: this.pending, shift: this.shift, raw: this.raw });
+    if (this.undoStack.length > 60) this.undoStack.shift();
+  }
+  undo() {
+    const s = this.undoStack.pop();
+    if (!s) return false;
+    Object.assign(this, s);
+    this.lastFix = null;
+    return true;
   }
 
   learn(words) { for (const w of words) if (/^[a-z']+$/i.test(w)) this.learned.add(w.toLowerCase()); }
@@ -140,14 +155,47 @@ export class KeyTyper {
       return [...succ.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => this.caseNext(this.dec.words[id]));
     }
     const best = this.bestWord();
-    const others = this.raw ? [] : this.ranked(n + 1).map((c) => (c.typed ? this.exactCase(this.typedWord()) : this.caseLike(c.word)));
-    return [...new Set([best, ...others, this.exactCase(this.typedWord())])].slice(0, n + 1);
+    const typed = this.exactCase(this.typedWord());
+    const longer = this.completions(2);
+    const others = this.raw ? [] : this.ranked(3).map((c) => (c.typed ? typed : this.caseLike(c.word)));
+    // Best same-length word, the two likeliest longer words, then other same-length guesses and the exact letters.
+    const order = [best, ...longer, ...others, typed];
+    const out = [...new Set(order)].slice(0, n + 1);
+    if (!out.includes(typed) && typed !== best) out[out.length - 1] = typed;
+    return out;
   }
 
   commitWord() {
     if (!this.pending.length) return;
-    this.committed += this.bestWord();
+    const typed = this.exactCase(this.typedWord()), best = this.bestWord();
+    this.lastFix = best !== typed ? { from: typed, to: best } : null;
+    this.committed += best;
     this.pending = [];
+  }
+
+  // Longer words that start with what is typed so far.
+  completions(n = 2) {
+    const slots = this.letterSlots();
+    if (!slots.length || this.raw || this.deliberateCase()) return [];
+    return this.dec.completeWord(slots.map((p) => p.probs), this.history(), { top: n }).map((c) => this.caseLike(c.word));
+  }
+
+  // Grey text offered after the cursor: the rest of the likeliest word, or the likeliest next word.
+  ghost() {
+    if (this.pending.length) {
+      const c = this.completions(1)[0];
+      return c ? { word: c, tail: c.slice(this.typedWord().length) } : null;
+    }
+    if (!this.committed || !/\s$/.test(this.committed)) return null;
+    const next = this.suggestions(1)[0];
+    return next ? { word: next, tail: next } : null;
+  }
+
+  acceptGhost() {
+    const g = this.ghost();
+    if (!g) return null;
+    this.pick(g.word);
+    return g.word;
   }
 
   // Take a chip. Picking the exact typed letters teaches the keyboard that word.

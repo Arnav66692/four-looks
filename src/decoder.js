@@ -91,6 +91,36 @@ export class Decoder {
     return best;
   }
 
+  // Words longer than what is typed so far, ranked by fit to the presses and by the word model.
+  completeWord(slots, history = -1, { top = 3, maxExtra = 10 } = {}) {
+    const n = this.groups.length, L = slots.length;
+    const channel = slots.map((p) => {
+      const row = new Float64Array(n);
+      for (let c = 0; c < n; c++) {
+        let s = 0;
+        for (let o = 0; o < n; o++) s += this.confusion[c][o] * p[o];
+        row[c] = Math.log(Math.max(s, 1e-9)) / LOG10;
+      }
+      return row;
+    });
+    const best = [];
+    for (let len = L + 1; len <= L + maxExtra; len++) {
+      const ids = this.byLength.get(len);
+      if (!ids) continue;
+      for (const w of ids) {
+        const code = this.codes[w];
+        let score = this.lm(history, w);
+        for (let k = 0; k < L; k++) score += channel[k][code[k]];
+        if (best.length < top || score > best[best.length - 1].score) {
+          best.push({ word: this.words[w], id: w, score });
+          best.sort((a, b) => b.score - a.score);
+          if (best.length > top) best.pop();
+        }
+      }
+    }
+    return best;
+  }
+
   // Re-decode a whole sentence so later words can fix earlier ones.
   // wordSlots: array of slot arrays, one per word. locked: map of word position -> word id the user fixed.
   decodeSentence(wordSlots, { beam = 40, perWord = 15, locked = new Map() } = {}) {

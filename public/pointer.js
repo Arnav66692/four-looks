@@ -64,6 +64,12 @@ export class HeadPointer {
     return p;
   }
 
+  // Unsmoothed, unclamped screen point. Used to spot quick gestures such as a nod.
+  raw(pose) {
+    if (!this.map || !pose) return null;
+    return this.map.map((row) => 0.5 + this.gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
+  }
+
   toJSON() { return { map: this.map }; }
   static from(o) { const p = new HeadPointer(); p.map = o?.map || null; return p; }
 }

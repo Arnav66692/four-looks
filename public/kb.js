@@ -18,7 +18,9 @@ const LOCK_MS = 250;                                    // time to grow from STI
 const VOTE_MS = 350;                                    // a press goes to the key you were on most in this window
 const MAGNET = 0.35;                                    // how far the drawn cursor leans toward the key centre
 const PRIOR_POW = 0.5;                                  // how much likely next letters grow their hidden target
-const STICKY_UNUSED = 0;                                    // hover stays until the pointer is this far into a new key
+const NOD_AMP = Number(params.get("nod") || 0.16);       // a nod dips the pointer at least this far (screen heights)
+const NOD_MS = 650;                                     // and comes back within this long
+const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
 const CHIP_SLOTS = 4;
 const POINTER_KEY = "fourlooks.pointer.v1";
 const HOLD_KEY = "fourlooks.hold.v1";
@@ -30,17 +32,17 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "space", "speak", "clear"],
+    ["123", "space", "undo", "fix", "speak", "clear"],
   ],
   sym: [
     [..."1234567890", "⌫"],
     ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\"", "send"],
     ["#", "%", "*", "+", "=", "_", "!", ",", ".", "?"],
-    ["abc", "space", "speak", "clear"],
+    ["abc", "space", "undo", "fix", "speak", "clear"],
   ],
 };
-const FN = new Set(["⌫", "shift", "123", "abc", "speak", "clear"]);
-const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", clear: "clear" };
+const FN = new Set(["⌫", "shift", "123", "abc", "speak", "clear", "undo", "fix"]);
+const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", clear: "clear", undo: "undo", fix: "fix" };
 
 const log = [];
 const record = (type, extra = {}) => log.push({ t: Date.now(), type, ...extra });
@@ -111,6 +113,8 @@ function renderText() {
   if (!typer) return;
   $("done").textContent = typer.committed;
   $("typing").textContent = typer.pending.length ? typer.exactCase(typer.typedWord()) : "";
+  const g = typer.ghost();
+  $("ghost").textContent = g ? g.tail : "";
   $("textbox").classList.toggle("empty", !typer.text());
   $("textbox").scrollTop = $("textbox").scrollHeight;
   const sugg = typer.suggestions(3);
@@ -132,13 +136,99 @@ function letterProbs(x, y) {
   return w.map((v) => v / z);
 }
 
+// ---------- metrics: speed and effort, from what was actually typed ----------
+const stats = { produced: 0, presses: 0, undone: 0, activeMs: 0, lastAt: 0, fixes: 0 };
+function countInput(kind, before) {
+  const now = Date.now();
+  if (stats.lastAt) stats.activeMs += Math.min(now - stats.lastAt, IDLE_MS);
+  stats.lastAt = now;
+  stats.presses++;
+  if (kind === "undo") stats.undone++;
+  const grew = typer.text().length - before;
+  if (grew > 0) stats.produced += grew;
+  renderStats();
+}
+function metrics() {
+  const min = stats.activeMs / 60000;
+  return {
+    wpm: min > 0.05 ? +(stats.produced / 5 / min).toFixed(1) : 0,
+    keysSaved: stats.produced > 0 ? Math.max(0, Math.round(100 * (1 - stats.presses / stats.produced))) : 0,
+    undone: stats.presses > 0 ? Math.round((100 * stats.undone) / stats.presses) : 0,
+    chars: stats.produced, presses: stats.presses, fixes: stats.fixes, minutes: +min.toFixed(2),
+  };
+}
+function renderStats() {
+  const m = metrics();
+  $("stats").textContent = stats.presses ? `${m.wpm} wpm · ${m.keysSaved}% keys saved · ${m.undone}% undone` : "";
+}
+window.fourLooks.metrics = metrics;
+
+function noteFix() {
+  const f = typer.lastFix;
+  if (!f) return;
+  typer.lastFix = null;
+  stats.fixes++;
+  prompt(`Changed "${f.from}" to "${f.to}". Press undo to keep "${f.from}".`);
+  $("textbox").classList.remove("flash"); void $("textbox").offsetWidth; $("textbox").classList.add("flash");
+}
+
+function acceptGhost(how) {
+  if (!typer || calibrating) return false;
+  if (pendingFix) { applyFix(); return true; }
+  if (!typer.ghost()) return false;
+  const before = typer.text().length;
+  typer.save();
+  const word = typer.acceptGhost();
+  tick();
+  record("ghost", { word, how });
+  countInput("ghost", before);
+  updateKeys(); renderText(); updatePrior(); mirror();
+  return true;
+}
+
+// ---------- Grok check: grammar and sense, through the local server (needs XAI_API_KEY in .env) ----------
+let pendingFix = null;
+async function askFix() {
+  if (pendingFix) { applyFix(); return; }
+  typer.commitWord();
+  const text = typer.text().trim();
+  if (!text) return;
+  prompt("Checking with Grok.");
+  try {
+    const r = await (await fetch("/api/fix", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) })).json();
+    if (!r.ok) { prompt(r.error === "no key" ? "Grok is off. Add XAI_API_KEY to four-looks/.env and restart." : `Grok check failed: ${r.error}`); return; }
+    record("fix-check", { text, fixed: r.text });
+    if (r.text.trim() === text) { prompt("Grok: reads fine."); return; }
+    pendingFix = r.text.trim();
+    prompt(`Grok suggests: ${pendingFix}  Nod or press fix again to use it. Undo to dismiss.`);
+  } catch (err) { prompt(`Grok check failed: ${err.message}`); }
+}
+function applyFix() {
+  if (!pendingFix) return;
+  typer.save();
+  typer.committed = pendingFix + " ";
+  typer.pending = [];
+  record("fix-apply", { text: pendingFix });
+  pendingFix = null;
+  prompt("Used Grok's version.");
+  updateKeys(); renderText(); updatePrior(); mirror();
+}
+
 function press(el, x, y) {
   const k = el.dataset.key;
   if (k === "pick" && !el.dataset.word) return;
   tick();
   el.classList.add("pressed");
   setTimeout(() => el.classList.remove("pressed"), 120);
-  if (k === "pick") {
+  const before = typer.text().length;
+  const edits = !["shift", "123", "abc", "speak", "undo", "fix"].includes(k);
+  if (edits) typer.save();
+  if (k === "undo") {
+    if (pendingFix) { pendingFix = null; prompt("Dismissed."); }
+    else { const ok = typer.undo(); record("undo"); prompt(ok ? "Undone." : "Nothing to undo."); }
+    countInput("undo", before);
+  } else if (k === "fix") { askFix(); }
+  else if (k === "pick") {
     typer.pick(el.dataset.word);
     store(WORDS_KEY, [...typer.learned]);
     record("pick", { word: el.dataset.word });
@@ -153,6 +243,8 @@ function press(el, x, y) {
   else if (k === "send") send();
   else if (k === "clear") { typer.clear(); mirrored = ""; record("clear"); }
   else { typer.literal(k); record("symbol", { key: k }); }
+  if (edits && k !== "send" && k !== "clear") countInput(k === "⌫" ? "undo" : "key", before);
+  noteFix();
   updateKeys();
   renderText();
   updatePrior();
@@ -297,6 +389,25 @@ function movePointer(x, y, t) {
   $("ring").style.strokeDashoffset = String(100.5 * (1 - progress));
 }
 
+// ---------- nod: a quick dip and return of the head accepts the grey guess ----------
+const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, last: 0 };
+function detectNod(f) {
+  const raw = pointer.raw(f.pose);
+  if (!raw) return;
+  const [x, y] = raw;
+  if (nod.rest == null) { nod.rest = y; nod.restX = x; return; }
+  const dy = y - nod.rest;
+  if (nod.state === "rest") {
+    if (dy > NOD_AMP && f.t - nod.last > 700) { nod.state = "down"; nod.since = f.t; nod.peak = dy; }
+    else { nod.rest += 0.12 * (y - nod.rest); nod.restX += 0.12 * (x - nod.restX); }
+  } else {
+    nod.peak = Math.max(nod.peak, dy);
+    const sideways = Math.abs(x - nod.restX) > 0.6 * nod.peak;
+    if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; }   // a real move, not a nod
+    else if (dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; acceptGhost("nod"); }
+  }
+}
+
 // ---------- camera ----------
 let blinkSince = null, blinkFired = false;
 function onFrame(f) {
@@ -313,6 +424,7 @@ function onFrame(f) {
     const p = pointer.point(f.pose, f.t);
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
+  detectNod(f);
   if (c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
     const target = intended(blinkSince);       // where you were when the press move started
@@ -453,6 +565,12 @@ addEventListener("mousedown", (e) => {
   if (el && typer) { e.preventDefault(); press(el, e.clientX, e.clientY); armed = false; hoverSince = performance.now(); }
 });
 setInterval(() => { if (cursorAt && (!usingCamera || !pointer.ready)) movePointer(cursorAt[0], cursorAt[1], performance.now()); }, 33);
+addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); acceptGhost("tab"); } });
+$("stats").addEventListener("click", () => {     // save the session log for scoring
+  const blob = new Blob([JSON.stringify({ metrics: metrics(), log }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `four-looks-session-${Date.now()}.json`; a.click();
+});
 addEventListener("resize", measure);
 
 (async () => {
