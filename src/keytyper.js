@@ -94,7 +94,10 @@ export class KeyTyper {
   typingDisplay() {
     if (!this.pending.length) return "";
     if (this.groupMode()) return this.bestWord();
-    return this.likelyLetters();
+    // Exactly the keys pressed. Showing the guesser's belief instead made a pressed U read as L
+    // whenever an L word was likelier, which looked like the wrong key had fired. Autocorrect still
+    // runs when the word ends, and a shake or undo refuses it.
+    return this.exactCase(this.typedWord());
   }
 
   // The letters shown while a word is in progress. A press that landed on a neighbouring key shows the

@@ -8,13 +8,17 @@ import { createAdmin } from "./admin.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-const DWELL = Number(params.get("dwell") || 1000);     // ms on a key to press it
+const DWELL_KEY = "fourlooks.dwell.v1";
+const DWELL_STEPS = [1000, 800, 600];                   // hold times to choose from, ms
+let DWELL = Number(params.get("dwell")) || (() => { try { const v = JSON.parse(localStorage.getItem(DWELL_KEY)); return DWELL_STEPS.includes(v) ? v : 800; } catch { return 800; } })();   // ms on a key to press it
 const CUE_KEY = "fourlooks.cue.v1";                     // which face move presses, with its per-person line and length
 const REACH_KEY = "fourlooks.reach.v3";
 const TUNE_KEY = "fourlooks.tune.v2";                   // sensitivity and smoothing found by the tuning run
 const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
+const SIGMA_SURE = 0.3;                                 // spread for a hold press, which is deliberate
 const GAP = 0.2;                                        // the gap between keys belongs to the nearest key within this (key sizes)
+const ROW_HAIR = 0.28;                                  // and this much of its height against a slip to another row
 const EDGE_HAIR = 0.08;                                 // an unlocked key keeps this much past its edge, to stop flicker on a boundary
 const LOCK_AT = 1 / 3;                                  // a key locks once this share of the hold has been spent on it (he asked for a third, was half)
 const STICKY_LOCKED = 0.5;                              // how far past its edge (in key sizes) a locked key still holds
@@ -200,8 +204,8 @@ function renderText() {
 }
 
 // ---------- pressing ----------
-function letterProbs(x, y) {
-  const s = SIGMA * keyWidth;
+function letterProbs(x, y, sigma = SIGMA) {
+  const s = sigma * keyWidth;
   const w = new Array(26).fill(0);
   for (const c of letterCenters) w[LETTERS.indexOf(c.letter)] = Math.exp(-((x - c.x) ** 2 + (y - c.y) ** 2) / (2 * s * s));
   const z = w.reduce((a, b) => a + b, 0) || 1;
@@ -333,7 +337,7 @@ function applyFix() {
   updateKeys(); renderText(); updatePrior(); mirror();
 }
 
-function press(el, x, y) {
+function press(el, x, y, sure = false) {
   const k = el.dataset.key;
   if (k === "pick" && !el.dataset.word) return;
   tick();
@@ -369,7 +373,10 @@ function press(el, x, y) {
     lastPress = [...group].map((c) => [c, 1 / group.length]);
     record("letter", { key: k });
   } else if (k.length === 1 && LETTERS.includes(k)) {
-    const probs = letterProbs(x, y);
+    // A hold press is deliberate: the key filled while you watched it. It counts as that key, from its
+    // centre and with a tight spread, so the word guesser rarely overrules a letter you clearly chose.
+    const kr = el.getBoundingClientRect();
+    const probs = sure ? letterProbs(kr.left + kr.width / 2, kr.top + kr.height / 2, SIGMA_SURE) : letterProbs(x, y);
     lastPress = probs.map((p, i) => [LETTERS[i], p]).sort((a, b) => b[1] - a[1]).slice(0, 3);
     typer.letter(probs);
     record("letter", { key: k });
@@ -498,8 +505,12 @@ const isLocked = (t) => lockShare(t) >= LOCK_AT;
 function stillOn(el, x, y, t) {
   if (!el || !el.isConnected) return false;
   // Before the lock a key keeps only a hair past its edge, enough to stop flicker on the line between two keys.
-  const r = el.getBoundingClientRect(), m = (isLocked(t) ? STICKY_LOCKED : EDGE_HAIR) * Math.min(r.width, r.height);
-  return x > r.left - m && x < r.right + m && y > r.top - m && y < r.bottom + m;
+  // His traces show the cursor bouncing between rows far more than along a row (up-down head movement is
+  // small and noisy), so before the lock a key holds further against a slip to the row above or below.
+  const r = el.getBoundingClientRect(), locked = isLocked(t);
+  const mx = locked ? STICKY_LOCKED * Math.min(r.width, r.height) : EDGE_HAIR * r.width;
+  const my = locked ? STICKY_LOCKED * Math.min(r.width, r.height) : ROW_HAIR * r.height;
+  return x > r.left - mx && x < r.right + mx && y > r.top - my && y < r.bottom + my;
 }
 // The key you were on for most of the last VOTE_MS, and where you were on it.
 function intended(t) {
@@ -573,7 +584,7 @@ function movePointer(x, y, t) {
     }
     if (holdEl && holdP >= 1) {
       const r = holdEl.getBoundingClientRect();
-      press(holdEl, Math.min(r.right, Math.max(r.left, x)), Math.min(r.bottom, Math.max(r.top, y)));
+      press(holdEl, Math.min(r.right, Math.max(r.left, x)), Math.min(r.bottom, Math.max(r.top, y)), true);
       pressedEl = holdEl; offSince = null;   // backspace is the one key that repeats while you stay on it
       holdP = 0; hoverSince = t;
     }
@@ -1233,6 +1244,7 @@ const SETTINGS = [
   { id: "presshold", label: "Press hold", value: () => pressName, run: () => { const names = Object.keys(PRESS_STEPS); pressName = names[(names.indexOf(pressName) + 1) % names.length]; pressExtra = PRESS_STEPS[pressName]; store(PRESS_KEY, pressName); } },
   { id: "layout", label: "Key layout", value: () => LAYOUT_NAME[letters], run: () => { letters = LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); renderText(); } },
   { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = REACH_STEPS.includes(pointer.gain) ? cycle(REACH_STEPS, pointer.gain) : 1; store(REACH_KEY, pointer.gain); } },
+  { id: "dwell", label: "Hold time", value: () => `${DWELL / 1000} s`, run: () => { DWELL = DWELL_STEPS[(DWELL_STEPS.indexOf(DWELL) + 1) % DWELL_STEPS.length]; store(DWELL_KEY, DWELL); holdP = 0; } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
   { id: "admin", label: "Admin view", value: () => (adminOn ? "on" : "off"), run: () => { adminOn = !adminOn; store("fourlooks.admin.v1", adminOn); applyViews(); } },
