@@ -34,6 +34,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; cursor: default; }
 body {
   display: grid; grid-template-rows: minmax(90px, 22vh) minmax(48px, 8.5vh) 1fr 40px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px; padding: 12px 12px 0; height: 100vh;
 }
 
@@ -99,8 +100,9 @@ body {
 .pressed { transform: scale(0.95); transition-duration: 70ms; }
 
 /* footer */
-#bar { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
-#prompt { margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#bar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-width: 0; }
+#bar button, #bar a { flex: none; }
+#prompt { margin: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #prompt.big {
   position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; white-space: normal;
   font-size: clamp(26px, 3.6vw, 50px); letter-spacing: -0.02em; color: var(--ink);
@@ -125,3 +127,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .key, [data-key]::before, #target, #caret { transition: none !important; animation: none !important; }
 }
+
+/* eye closure meter: bar is how closed the eyes are, tick is the press line */
+#meter { position: absolute; left: 10px; right: 10px; top: 10px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.22); }
+#meter::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; width: calc(var(--c, 0) * 100%); background: #3fbf8f; }
+#meter::after { content: ""; position: absolute; top: -3px; bottom: -3px; width: 2px; left: calc(var(--thr, 0.5) * 100%); background: #fff; }

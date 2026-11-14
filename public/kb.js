@@ -3,12 +3,12 @@ import { Decoder, LETTER_GROUPS } from "/src/decoder.js";
 import { KeyTyper, LETTERS } from "/src/keytyper.js";
 import { startFace } from "./face.js";
 import { HeadPointer } from "./pointer.js";
+import { DEFAULT_BLINK, closure, fitBlink } from "./blink.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const DWELL = Number(params.get("dwell") || 650);      // ms on a key to press it
-const BLINK_MS = Number(params.get("blink") || 260);    // a deliberate blink this long presses the key under the cursor
-const EYES_CLOSING = 0.35;                              // freeze the cursor while the eyes close, so a blink presses where you were
+const BLINK_KEY = "fourlooks.blink.v1";                 // per-person blink line and length, from blink calibration
 const SIGMA = 0.45;                                     // press spread, in key widths
 const STICKY = 0.25;                                    // hover stays until the pointer is this far into a new key
 const CHIP_SLOTS = 4;
@@ -46,6 +46,7 @@ let keyWidth = 60;
 let lastFrame = null;
 let usingCamera = false;
 let calibrating = false;
+let blinkCfg = loadBlink();
 let holdToPress = loadHold();   // off by default: blink presses, holding only highlights
 const watchers = new Set();
 
@@ -53,6 +54,7 @@ function loadPointer() {
   try { return HeadPointer.from(JSON.parse(localStorage.getItem(POINTER_KEY))); } catch { return new HeadPointer(); }
 }
 function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
+function loadBlink() { try { return { ...DEFAULT_BLINK, ...JSON.parse(localStorage.getItem(BLINK_KEY)) }; } catch { return { ...DEFAULT_BLINK }; } }
 function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 function prompt(text, big = false) { $("prompt").textContent = text; $("prompt").classList.toggle("big", big); }
@@ -241,16 +243,18 @@ function onFrame(f) {
   watchers.forEach((w) => w(f));
   $("status").textContent = f.face ? (pointer.ready ? "tracking" : "calibrate") : "no face";
   $("status").classList.toggle("live", f.face && pointer.ready);
+  const c = f.face ? closure(f.scores) : 0;
+  $("meter").style.setProperty("--c", String(c));
+  $("meter").style.setProperty("--thr", String(blinkCfg.thr));
   if (!f.face || calibrating || !pointer.ready) return;
-  const closing = Math.max(f.scores.eyeBlinkLeft || 0, f.scores.eyeBlinkRight || 0) > EYES_CLOSING;
+  const closing = c > blinkCfg.freeze;
   if (!closing) {
     const p = pointer.point(f.pose, f.t);
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
-  const blink = (f.scores.eyeBlinkLeft || 0) > 0.5 && (f.scores.eyeBlinkRight || 0) > 0.5;
-  if (blink) {
+  if (c > blinkCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
-    if (!blinkFired && f.t - blinkSince > BLINK_MS && hoverEl && cursorAt) {
+    if (!blinkFired && f.t - blinkSince > blinkCfg.ms && hoverEl && cursorAt) {
       blinkFired = true;
       press(hoverEl, cursorAt[0], cursorAt[1]);
       hoverSince = f.t; armed = false;
@@ -289,8 +293,48 @@ async function calibrate() {
     pointer.fit(poses, used);
     store(POINTER_KEY, pointer);
     record("calibrate", { points: poses.length });
-    prompt("Ready. Blink to press keys.");
+    calibrating = false;
+    await calibrateBlink();
+    return;
   } else prompt("Lost your face during calibration. Add light and try again.");
+  calibrating = false;
+}
+
+async function collectClosure(ms) {
+  const xs = [];
+  const w = (f) => { if (f.face) xs.push({ t: f.t, c: closure(f.scores) }); };
+  watchers.add(w);
+  await sleep(ms);
+  watchers.delete(w);
+  return xs;
+}
+
+async function calibrateBlink() {
+  if (!lastFrame) { prompt("Start the camera first."); return; }
+  calibrating = true;
+  $("cursor").style.display = "none";
+  prompt("Eyes open. Look at the screen.", true);
+  await sleep(900);
+  const open = (await collectClosure(2000)).map((x) => x.c);
+  const firm = [];
+  for (let i = 1; i <= 3; i++) {
+    prompt(`Ready for blink ${i} of 3.`, true);
+    await sleep(1100);
+    prompt("Blink firmly now.", true);
+    firm.push(await collectClosure(1600));
+  }
+  prompt("Now blink normally a few times.", true);
+  await sleep(600);
+  const normal = await collectClosure(4500);
+  const fit = fitBlink(open, firm, normal);
+  record("blink-calibrate", fit);
+  if (fit.ok) {
+    blinkCfg = fit;
+    store(BLINK_KEY, blinkCfg);
+    prompt(fit.clean
+      ? `Blink set. Hold a blink about ${Math.round(fit.ms / 10) * 10} ms to press.`
+      : "Blink set, but your normal blinks are close to your firm ones. Make press blinks a little longer.");
+  } else prompt(`Could not see your blinks clearly (${fit.why}). Face the camera with more light and try again.`);
   calibrating = false;
 }
 
@@ -307,6 +351,7 @@ $("start").addEventListener("click", async () => {
   }
 });
 $("calibrate").addEventListener("click", () => { if (!calibrating) calibrate(); });
+$("blinkcal").addEventListener("click", () => { if (!calibrating) calibrateBlink(); });
 function showHold() { $("hold").textContent = holdToPress ? "hold to press: on" : "hold to press: off"; $("hold").classList.toggle("on", holdToPress); }
 $("hold").addEventListener("click", () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); showHold(); });
 showHold();
