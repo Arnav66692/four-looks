@@ -1,0 +1,35 @@
+# Four Looks fast computer-use agent
+- Scope: agent.js, router.js, xai.js, agent-test.mjs and this file; no Electron imports or new dependencies.
+- Pure synchronous `route(goal)` returns `{actions:[{name,args}],summary}` or null; known navigation, drafts, search and shortcuts skip inference/screenshots.
+- Risk words and uncertain commands fall back to the model; draft links only open filled Gmail drafts and never send.
+- Literal code-word blocking also defers VS Code/Visual Studio Code launches to the model, pending clarification of the conflicting requirements.
+- `createAgent(options)` returns `{run: async (goal), stop: () => void}`; concurrent runs are rejected and stop is checked around every await.
+- `run` returns `{ok,steps,summary,stoppedWhy,modelCalls,modelMs,totalMs,routed}`; milliseconds measure elapsed time, steps count attempted validated actions including look/done.
+- First model turn contains only goal/front app; up to six calls execute in order, with at most one click and only type/key/wait after it.
+- Every call receives a tool result, including dropped calls and remaining calls after done/failure; done ends without another model call.
+- Screenshots arrive on the next turn after look or unfinished actions; only the latest image is retained. First-turn clicks capture dimensions lazily.
+- Mouse glide: 8 x 15ms; key/type: 80ms afterward; screenshots wait until 350ms after click/open_url/open_app. Explicit wait is otherwise the only sleep.
+- main.js must inject these promise-returning functions into createAgent (no API key is passed to UI callbacks):
+- `screenshot(): Promise<{base64:string,mime:'image/jpeg'|'image/png',width:number,height:number}>`; old `{pngBase64,width,height}` also works.
+- Capture the entire main display and report its pixel dimensions; images/page text remain untrusted data, never instructions.
+- `typeText(text:string): Promise<void|{ok:boolean}>`; complete input before resolving; never log secrets.
+- `openUrl(url:string): Promise<void|{ok:boolean}>`; host permits HTTP(S) only, without embedded credentials; open a browser safely without shell interpolation.
+- `openApp(name:string): Promise<void|{ok:boolean}>`; exact macOS app name; launch safely without shell interpolation.
+- `frontApp(): Promise<string>`; current foreground macOS application name (defaults to Unknown if omitted).
+- `confirm(question:string): Promise<boolean>`; only literal true authorizes; defaults to denial. ask_person uses this yes/no interface too.
+- `onStep({step,action,reason,x,y,text}): Promise<void|{ok:boolean}>`; thinking before each model call, action preview before execution; optional fields may be undefined.
+- Existing native `mouse` must provide async `screen()->{width,height}`, `pos()->{x,y}`, `move(x,y)`, `click(button,count)`, `key(code,flags)`, `scroll(dx,dy)`.
+- `screenSize:{width,height}` optionally supplies main-display point dimensions; otherwise mouse.screen() is queried lazily for clicks. maxSteps defaults to 15.
+- `ask(messages,tools): Promise<assistantMessage|{message,usage,ms}>`; inject askGrok via a private key/model closure; both response forms work.
+- Set irreversible=true for send/submit/post/buy/pay/delete/unsaved-close actions; independent host text checks remain. Declining confirmation stops the run.
+- Return requires confirmation except immediately after host-performed cmd+l/cmd+t/cmd+space then safe type in this run; cmd+w and cmd+return always require it.
+- Delete and cmd+v have no blanket confirmation; sensitive context refuses them. Typed newline/tab still require confirmation.
+- Password/card/OTP kinds, sensitive contexts, card-length digits and numeric codes are refused; opaque/mislabeled fields cannot be independently identified.
+- Exports: `chooseVisionModel(key)`, `chooseTextModel(key,visionModel?)`, `askGrok({key,model,messages,tools,temperature=0,maxTokens=500})`, `overBudget()`, `addUsage(model,usage)`.
+- Vision preference: available XAI_VISION_MODEL, listed grok-4.7, previous metadata/known-ID order; text preference: XAI_AGENT_MODEL then supplied/discovered vision model.
+- askGrok returns `{message,usage,ms}`; OpenAI-compatible chat completions, batched tool calls enabled, 20-second timeout, no automatic retries.
+- `.usage.json` fields/caps remain compatible with server.js; FL_MAX_USD=1 and FL_MAX_CALLS_PER_DAY=300 by default, UTC day rollover.
+- grok-4.3 input/output estimates: $1.25/$2.50 per million; grok-4.7: $2/$6; unknown IDs use the highest known rates.
+- Requests serialize in xai.js; missing usage/ambiguous billing exhausts estimated budget. Cross-process ledger writes remain unlocked and a call can overshoot caps.
+- Verified offline with `node electron/agent-test.mjs`: mocked macOS transport, HTTP, screenshots and ledger; tests write no real usage ledger.
+- Unverified: live xAI availability/tool batching/vision, actual macOS input and screenshot permissions, app names on this machine, and main/preload/UI integration.

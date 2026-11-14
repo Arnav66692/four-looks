@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Four Looks, Grok cursor</title>
+<style>
+  @font-face { font-family: "Barlow"; src: url("fonts/barlow-500.woff2") format("woff2"); font-weight: 500; }
+  html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: "Barlow", system-ui, sans-serif; }
+  /* Grok's own cursor: separate from the person's, so a watcher can tell who is acting. */
+  #g { position: absolute; left: 0; top: 0; opacity: 0; will-change: transform; transition: transform 140ms cubic-bezier(.2, .7, .2, 1), opacity 180ms linear; }
+  #g.on { opacity: 1; }
+  #g svg { display: block; width: 30px; height: 30px; filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .45)); }
+  #g .ring { position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid #fff; opacity: 0; }
+  #g.click .ring { animation: ping 380ms ease-out; }
+  #g.think svg { animation: think 900ms ease-in-out infinite; }
+  #say { position: absolute; left: 26px; top: 22px; max-width: 420px; padding: 6px 10px; border-radius: 9px; background: #0b0b0c; color: #f4f3ef;
+    font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+  #say:empty { display: none; }
+  #g.flip #say { left: auto; right: 14px; }
+  @keyframes ping { from { opacity: .9; transform: scale(.4); } to { opacity: 0; transform: scale(2.2); } }
+  @keyframes think { 0%, 100% { transform: scale(1); } 50% { transform: scale(.86); } }
+  @media (prefers-reduced-motion: reduce) { #g { transition: opacity 180ms linear; } #g.think svg { animation: none; } }
+</style>
+</head>
+<body>
+<div id="g">
+  <div class="ring"></div>
+  <svg viewBox="0 0 30 30" aria-hidden="true"><path d="M3 2l9.5 24 3.2-9.8 9.8-3.2z" fill="#0b0b0c" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/></svg>
+  <div id="say"></div>
+</div>
+<script>
+  const g = document.getElementById("g"), say = document.getElementById("say");
+  let at = [innerWidth / 2, innerHeight / 2], hideTimer = 0;
+  const place = () => { g.style.transform = `translate3d(${at[0]}px, ${at[1]}px, 0)`; g.classList.toggle("flip", at[0] > innerWidth - 470); };
+  place();
+  const LABEL = { thinking: "Thinking", click: "Click", type: "Typing", key: "Key", scroll: "Scroll", open_url: "Opening", open_app: "Opening", look: "Looking", wait: "Waiting", done: "Done", ask_person: "Asking you" };
+  window.fourLooksOut?.onAgent?.((ev) => {
+    clearTimeout(hideTimer);
+    if (ev.type === "end") { say.textContent = ev.text || ""; g.classList.remove("think"); hideTimer = setTimeout(() => g.classList.remove("on"), 2200); return; }
+    g.classList.add("on");
+    if (ev.type === "confirm") { say.textContent = `${ev.text}  Nod for yes, shake for no.`; g.classList.remove("think"); return; }
+    if (ev.type !== "step") return;
+    g.classList.toggle("think", ev.action === "thinking");
+    // Screen points to this window: the window may not start at the very top-left of the display.
+    if (Number.isFinite(ev.x) && Number.isFinite(ev.y)) { at = [ev.x - screenX, ev.y - screenY]; place(); }
+    say.textContent = ev.action === "thinking" ? "Thinking" : (ev.reason || LABEL[ev.action] || ev.action);
+    if (ev.action === "click") setTimeout(() => { g.classList.remove("click"); void g.offsetWidth; g.classList.add("click"); }, 150);
+  });
+</script>
+</body>
+</html>

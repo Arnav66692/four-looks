@@ -10,5 +10,9 @@ contextBridge.exposeInMainWorld("fourLooksOut", {
   mouse: (op, ...args) => ipcRenderer.invoke("four-looks:mouse", op, ...args),
   mode: (mode, fraction) => ipcRenderer.invoke("four-looks:mode", mode, fraction),
   focusRole: () => ipcRenderer.invoke("four-looks:focus-role"),
+  agentRun: (goal) => ipcRenderer.invoke("four-looks:agent-run", goal),
+  agentStop: () => ipcRenderer.invoke("four-looks:agent-stop"),
+  agentAnswer: (id, yes) => ipcRenderer.invoke("four-looks:agent-answer", id, yes),
+  onAgent: (fn) => ipcRenderer.on("four-looks:agent-event", (_e, payload) => fn(payload)),
   quit: () => ipcRenderer.invoke("four-looks:quit"),
 });
