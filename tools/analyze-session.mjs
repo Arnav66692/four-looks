@@ -41,17 +41,19 @@ if (rest.length > 20) {
   if (Math.hypot(driftX, driftY) > 40) flags.push(`Cursor drifted ${Math.hypot(driftX, driftY).toFixed(0)} px in 6 s of holding still: posture drift is real, recenter often or switch to a relative pointer.`);
 }
 
-// 2. reach
-const reach = {};
-for (const d of ["left", "right", "up", "down"]) { const f = frames(`reach-${d}`); if (f.length) reach[d] = { yaw: deg(mean(f.map((x) => x.yaw))), pitch: deg(mean(f.map((x) => x.pitch))) }; }
-if (reach.left && reach.right && reach.up && reach.down) {
-  const yawSpan = Math.abs(reach.left.yaw - reach.right.yaw), pitchSpan = Math.abs(reach.up.pitch - reach.down.pitch);
-  say(`\n2. Comfortable reach`);
-  say(`   turn   ${yawSpan.toFixed(1)} deg from left to right`);
-  say(`   nod    ${pitchSpan.toFixed(1)} deg from up to down`);
-  say(`   the app currently asks for about 22.9 deg across and 14.9 deg up-down at reach 1x`);
-  if (yawSpan < 22.9) flags.push(`Comfortable turn is only ${yawSpan.toFixed(0)} deg but the keyboard needs 23: raise reach to about ${(22.9 / yawSpan).toFixed(1)}x.`);
-  if (pitchSpan < 14.9) flags.push(`Comfortable nod range is only ${pitchSpan.toFixed(0)} deg but the keyboard needs 15: raise reach or make the keyboard shorter.`);
+// 2. reach, measured during calibration
+const cal = ev.filter((e) => e.type === "calibrate" && e.turnDeg != null).pop();
+if (cal) {
+  say(`\n2. Comfortable reach (from calibration)`);
+  say(`   turn   ${cal.turnDeg} deg from left to right`);
+  say(`   nod    ${cal.nodDeg} deg from up to down`);
+  if (cal.turnDeg < 12) flags.push(`Comfortable turn is only ${cal.turnDeg} deg: keys across will be hard to tell apart.`);
+  if (cal.nodDeg < 8) flags.push(`Comfortable nod range is only ${cal.nodDeg} deg: four rows will be hard to tell apart, use fewer rows.`);
+}
+const cue = ev.filter((e) => e.type === "cue-calibrate").pop();
+if (cue) {
+  say(`   press move "${cue.cue}": ${cue.ok ? `calibrated, line ${cue.thr}, relaxed ${cue.restTop}, firm ${cue.peak}` : `NOT calibrated (${cue.why})`}`);
+  if (!cue.ok) flags.push(`The press move "${cue.cue}" could not be calibrated: ${cue.why}.`);
 }
 
 // 3. targets
@@ -61,12 +63,12 @@ if (done.length) {
   for (const size of ["small", "big"]) {
     const d = done.filter((e) => e.size === size);
     if (!d.length) continue;
-    const ok = d.filter((e) => e.heldMs >= 900);
+    const ok = d.filter((e) => e.heldMs >= (e.need || 900));
     say(`   ${size.padEnd(5)} boxes: ${ok.length} of ${d.length} held, median ${Math.round(median(ok.map((e) => e.totalMs)))} ms to finish, median ${Math.round(median(d.filter((e) => e.reachedMs != null).map((e) => e.reachedMs)))} ms to first touch`);
-    const slow = d.filter((e) => e.heldMs < 900 || e.totalMs > 3500).map((e) => `${e.fy < 0.4 ? "top" : e.fy > 0.7 ? "bottom" : "middle"}-${e.fx < 0.3 ? "left" : e.fx > 0.7 ? "right" : "centre"}`);
+    const slow = d.filter((e) => e.heldMs < (e.need || 900) || e.totalMs > 3500).map((e) => `${e.fy < 0.4 ? "top" : e.fy > 0.7 ? "bottom" : "middle"}-${e.fx < 0.3 ? "left" : e.fx > 0.7 ? "right" : "centre"}`);
     if (slow.length) say(`         hard spots: ${[...new Set(slow)].join(", ")}`);
     if (ok.length < d.length) flags.push(`Could not hold ${d.length - ok.length} of ${d.length} ${size} boxes: ${[...new Set(slow)].join(", ")}.`);
-    const settle = ok.filter((e) => e.reachedMs != null).map((e) => e.totalMs - e.reachedMs - 900);
+    const settle = ok.filter((e) => e.reachedMs != null).map((e) => e.totalMs - e.reachedMs - (e.need || 900));
     if (settle.length && median(settle) > 600) flags.push(`On ${size} boxes the cursor took a median ${Math.round(median(settle))} ms of slipping off and back before it held: aim is unsteady at that size.`);
   }
 }
@@ -108,15 +110,15 @@ if (nr.length) {
 const ty = ev.filter((e) => e.type === "s-type-done");
 if (ty.length) {
   say(`\n6. Typing the same sentences`);
-  for (const which of ["big", "abc"]) {
+  for (const which of ["head", "abc", "big"]) {
     const d = ty.filter((e) => e.layout === which);
     if (!d.length) continue;
     const right = d.filter((e) => e.got.toLowerCase().replace(/[^a-z ]/g, "") === e.sentence);
     const wpm = right.map((e) => (e.sentence.length / 5) / (e.ms / 60000));
     const t0 = ev.filter((e) => e.type === "s-type-start" && e.layout === which).map((e) => e.t), t1 = d.map((e) => e.t);
     const undos = ev.filter((e) => (e.type === "undo" || e.type === "backspace") && t0.some((a, i) => e.t >= a && e.t <= t1[i])).length;
-    say(`   ${which === "big" ? "big keys" : "QWERTY  "}  ${right.length} of ${d.length} sentences exact, ${wpm.length ? mean(wpm).toFixed(1) : "-"} words a minute, ${undos} undo or delete presses`);
-    if (right.length < d.length) flags.push(`${which === "big" ? "Big keys" : "QWERTY"}: ${d.length - right.length} of ${d.length} sentences not finished exactly in 75 s (got "${d.find((e) => !right.includes(e)).got}").`);
+    say(`   ${({ head: "head layout", abc: "QWERTY", big: "boxes" })[which]}  ${right.length} of ${d.length} sentences exact, ${wpm.length ? mean(wpm).toFixed(1) : "-"} words a minute, ${undos} undo or delete presses`);
+    if (right.length < d.length) flags.push(`${({ head: "Head layout", abc: "QWERTY", big: "Boxes" })[which]}: ${d.length - right.length} of ${d.length} sentences not finished exactly in 75 s (got "${d.find((e) => !right.includes(e)).got}").`);
   }
 }
 

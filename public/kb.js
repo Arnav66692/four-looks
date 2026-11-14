@@ -38,7 +38,16 @@ const LAYOUTS = {
     ["shift", ..."zxcvbnm", ",", ".", "?"],
     ["123", "layout", "menu", "space", "undo", "fix", "speak"],
   ],
-  // Built around where the head rests, not where hands rest. Share of English letters by key:
+  // Every letter on its own key, arranged for a head and not for hands. The ten most used letters
+  // (e t a o i n s h r d) fill the middle row with the busiest in the centre, the next eight sit below
+  // (nodding down is easier than up), and the eight rarest sit above.
+  head: [
+    ["⌫", ..."qjvpbkxz", "'", "send"],
+    [..."rsiaetonhd"],
+    ["shift", ..."gwulcmfy", ",", ".", "?"],
+    ["123", "layout", "menu", "space", "undo", "fix", "speak"],
+  ],
+  // Boxes: built around where the head rests, not where hands rest. Share of English letters by key:
   // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
   // middle. Turning is easier than nodding, so the next two sit left and right. Space, the most pressed
   // key of all, is straight below. The rare keys take the top corners.
@@ -78,8 +87,10 @@ setInterval(() => {                        // every session is saved on this com
 window.fourLooks = { log };
 
 let typer = null;
-const LAYOUT_KEY = "fourlooks.layout.v1";
-let letters = (() => { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)) === "abc" ? "abc" : "big"; } catch { return "big"; } })();   // big keys by default
+const LAYOUT_KEY = "fourlooks.layout.v2";
+const LETTER_LAYOUTS = ["head", "abc", "big"];        // head-arranged letters, QWERTY, letter-group boxes
+const LAYOUT_NAME = { head: "head", abc: "qwerty", big: "boxes" };
+let letters = (() => { try { const v = JSON.parse(localStorage.getItem(LAYOUT_KEY)); return LETTER_LAYOUTS.includes(v) ? v : "head"; } catch { return "head"; } })();
 let layer = letters;
 let pointer = loadPointer();
 let letterCenters = [];
@@ -150,7 +161,7 @@ function updateKeys() {
       label.innerHTML = typer?.shift === "lock" ? ICONS.caps : ICONS.shift;
     } else if (ICONS[k]) { if (!label.firstChild) label.innerHTML = ICONS[k]; }
     else if (k.startsWith("g:")) label.textContent = [...k.slice(2)].join(" ").toUpperCase();
-    else if (k === "layout") label.textContent = letters === "big" ? "qwerty" : "big keys";
+    else if (k === "layout") label.textContent = LAYOUT_NAME[LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]];
     else label.textContent = isLetter ? k.toUpperCase() : (FACE[k] ?? k);
   });
 }
@@ -305,7 +316,7 @@ function press(el, x, y) {
   else if (k === "⌫") { typer.backspace(); record("backspace"); }
   else if (k === "shift") typer.toggleShift();
   else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : letters; buildKeys(); }
-  else if (k === "layout") { letters = letters === "big" ? "abc" : "big"; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); }
+  else if (k === "layout") { letters = LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); }
   else if (k === "speak") speak(false);
   else if (k === "send") send();
   else { typer.literal(k); record("symbol", { key: k }); }
@@ -373,7 +384,7 @@ const history = [];                    // recent { t, el, x, y } for press votin
 
 // Next-letter odds after the letters typed so far, weighted by how common each word is.
 function updatePrior() {
-  if (!typer || layer !== "abc") { letterPrior = null; return; }
+  if (!typer || (layer !== "abc" && layer !== "head")) { letterPrior = null; return; }
   const prefix = typer.typedWord().toLowerCase().replace(/[^a-z]/g, "");
   const w = new Array(26).fill(0);
   const words = typer.dec.words, uni = typer.dec.uni;
@@ -498,7 +509,8 @@ function detectNod(f) {
 }
 
 // ---------- camera ----------
-let blinkSince = null, blinkFired = false, eyesShutSince = null, recentered = false;
+let blinkSince = null, blinkFired = false, eyesShutSince = null, recentered = false, freezeSince = null;
+const FREEZE_MAX_MS = 500;              // the cursor holds still at most this long while a press move rises
 const RECENTER_MS = 1100;               // eyes closed this long: the way you face now becomes the middle of the keyboard
 function onFrame(f) {
   lastFrame = f;
@@ -508,6 +520,7 @@ function onFrame(f) {
   const c = f.face ? CUES[cueCfg.cue].score(f.scores) : 0;
   $("meter").style.setProperty("--c", String(c));
   $("meter").style.setProperty("--thr", String(cueCfg.thr));
+  $("cuebar").style.setProperty("--c", String(c));
   if (adminOn && admin) drawAdmin(f, c);
   const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
   if (shut && !calibrating) {
@@ -520,14 +533,15 @@ function onFrame(f) {
     }
   } else eyesShutSince = null;
   if (!f.face || calibrating || !pointer.ready) return;
-  const closing = c > cueCfg.freeze;
+  if (!cueCfg.calibrated || c <= cueCfg.freeze) freezeSince = null; else if (freezeSince == null) freezeSince = f.t;
+  const closing = freezeSince != null && f.t - freezeSince < FREEZE_MAX_MS;
   if (!closing) {
     const p = pointer.point(f.pose, f.t);
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
   detectNod(f);
   study.watchers.forEach((w) => w(f, { cursor: cursorAt, score: c }));
-  if (c > cueCfg.thr) {
+  if (cueCfg.calibrated && c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
     const target = intended(blinkSince);       // where you were when the press move started
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && study.capture) { blinkFired = true; study.onPress?.(performance.now()); }
@@ -556,18 +570,33 @@ async function calibrate() {
   if (!lastFrame) { prompt("Start the camera first."); return; }
   calibrating = true;
   $("cursor").style.display = "none";
-  // One step: face the middle of the keyboard. That pose becomes the centre, with a fixed comfortable range.
-  const k = $("keys").getBoundingClientRect();
-  const tx = (k.left + k.width / 2) / innerWidth, ty = (k.top + k.height / 2) / innerHeight;
+  // Your own range: face the middle, then turn as far as is comfortable each way.
+  const keys = $("keys").getBoundingClientRect(), chips = $("chips").getBoundingClientRect();
+  const area = { cx: (keys.left + keys.width / 2) / innerWidth, cy: (keys.top + keys.height / 2) / innerHeight,
+    left: 0.03, right: 0.97, top: (chips.top + 4) / innerHeight, bottom: (keys.bottom - 6) / innerHeight };
   const dot = $("target");
-  dot.style.display = "block"; dot.style.left = `${tx * innerWidth}px`; dot.style.top = `${ty * innerHeight}px`;
-  prompt("Sit comfortably, face the dot and hold still.", true);
-  await sleep(1400);
-  const pose = await collectPose(900);
+  const showDot = (x, y) => { dot.style.display = "block"; dot.style.left = `${x * innerWidth}px`; dot.style.top = `${y * innerHeight}px`; };
+  showDot(area.cx, area.cy);
+  prompt("Sit comfortably. Face the dot and hold still.", true);
+  await sleep(1600);
+  const centre = await collectPose(900);
+  const ext = {};
+  const where = { left: [area.left, area.cy], right: [area.right, area.cy], up: [area.cx, area.top], down: [area.cx, area.bottom] };
+  for (const dir of ["left", "right", "up", "down"]) {
+    showDot(...where[dir]);
+    prompt(`Turn ${dir} as far as is comfortable, and hold.`, true);
+    await sleep(1700);
+    ext[dir] = await collectPose(800);
+    showDot(area.cx, area.cy);
+    prompt("Back to the middle.", true);
+    await sleep(1100);
+  }
   dot.style.display = "none";
-  if (pose && pointer.center(pose, tx, ty)) {
+  if (centre && ext.left && ext.right && ext.up && ext.down) {
+    pointer.fitRange(centre, ext, area);
     store(POINTER_KEY, pointer);
-    record("calibrate", { pose: pose.map((v) => +v.toFixed(4)) });
+    const deg = (r) => +((r * 180) / Math.PI).toFixed(1);
+    record("calibrate", { turnDeg: deg(Math.abs(ext.left[0] - ext.right[0])), nodDeg: deg(Math.abs(ext.up[1] - ext.down[1])), centre: centre.map((v) => +v.toFixed(4)) });
     calibrating = false;
     await calibrateCue();
     return;
@@ -591,26 +620,36 @@ async function calibrateCue() {
   const cue = CUES[cueCfg.cue];
   calibrating = true;
   $("cursor").style.display = "none";
-  prompt("Relax your face and look at the screen.", true);
-  await sleep(900);
-  const rest = (await collectCue(2000)).map((x) => x.c);
-  const firm = [];
-  for (let i = 1; i <= 3; i++) {
-    prompt(`Get ready, ${i} of 3.`, true);
-    await sleep(1100);
-    prompt(cue.firm, true);
-    firm.push(await collectCue(1600));
+  document.body.classList.add("cue-test");          // shows a large live bar of the press move
+  let fit = null;
+  for (let attempt = 1; attempt <= 2 && !(fit && fit.ok); attempt++) {
+    prompt(attempt === 1 ? "Relax your face. Watch the bar at the bottom." : `I did not see it. Relax, then ${cue.name} clearly when it says now.`, true);
+    await sleep(attempt === 1 ? 1400 : 2600);
+    const rest = (await collectCue(2000)).map((x) => x.c);
+    const firm = [];
+    for (let i = 1; i <= 3; i++) {
+      prompt(`Get ready, ${i} of 3.`, true);
+      await sleep(1300);
+      prompt(cue.firm, true);
+      firm.push(await collectCue(2000));
+    }
+    prompt(cue.normal, true);
+    await sleep(600);
+    const normal = await collectCue(4000);
+    fit = fitCue(cueCfg.cue, rest, firm, normal);
+    record("cue-calibrate", { attempt, ...fit });
   }
-  prompt(cue.normal, true);
-  await sleep(600);
-  const normal = await collectCue(4500);
-  const fit = fitCue(cueCfg.cue, rest, firm, normal);
-  record("cue-calibrate", fit);
+  document.body.classList.remove("cue-test");
   if (fit.ok) {
     cueCfg = fit;
     store(CUE_KEY, cueCfg);
     prompt(fit.clean ? `Set. A short ${cue.name} presses a key.` : `Set, but everyday movement comes close. Make a ${cue.name} a bit stronger to press.`);
-  } else prompt(`Could not see a clear ${cue.name} (${fit.why}). Try another press move, or add light.`);
+  } else {                                            // never run on a press move the camera cannot see
+    cueCfg = { ...DEFAULT_CUE, cue: cueCfg.cue, calibrated: false };
+    store(CUE_KEY, cueCfg);
+    holdToPress = true; store(HOLD_KEY, true); refreshMenu();
+    prompt(`I could not see your ${cue.name}. For now, hold on a key to press it. Pick another press move in the menu.`);
+  }
   calibrating = false;
 }
 

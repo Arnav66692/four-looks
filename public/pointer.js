@@ -47,39 +47,63 @@ export class HeadPointer {
   // Heavy smoothing when the head is nearly still, light smoothing when it moves fast.
   // deadzone: moves smaller than this (screen units) are ignored, so a still head gives a still cursor.
   constructor({ minCutoff = 0.35, beta = 2.2, deadzone = 0.005, gain = 1 } = {}) {
-    this.map = null; this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
+    this.map = null;           // affine map, from the older many-dot calibration
+    this.range = null;         // the person's own comfortable range: { c, left, right, up, down, area }
+    this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
     this.deadzone = deadzone; this.gain = gain; this.shown = null;
-    this.offset = [0, 0];      // slow correction for posture drift, in screen units, learned from presses
+    this.offset = [0, 0];      // slides when the head pushes past an edge or on recenter, in screen units
+  }
+  get ready() { return !!(this.map || this.range); }
+
+  // poses: head pose samples (means). targets: matching points in 0..1 screen units.
+  fit(poses, targets) { this.map = fitAffine(poses, targets); this.range = null; this.offset = [0, 0]; }
+
+  // Calibration to the person's own range. c is the pose facing the middle. left, right, up and down
+  // are the poses at the furthest comfortable turn each way. area says where those should land on
+  // screen: { cx, cy, left, right, top, bottom } in 0..1. A side that barely moved gets a default span.
+  fitRange(c, ext, area, minSpan = 0.05) {
+    const span = (v, base, fallback) => (Math.abs(v - base) >= minSpan ? v - base : fallback);
+    this.range = {
+      c,
+      left: span(ext.left[0], c[0], 0.2), right: span(ext.right[0], c[0], -0.2),
+      up: span(ext.up[1], c[1], 0.13), down: span(ext.down[1], c[1], -0.13),
+      area,
+    };
+    this.map = null; this.offset = [0, 0]; this.shown = null;
+  }
+
+  // Pose -> screen point, before smoothing. gain stretches the motion around the centre.
+  project(pose, gain = this.gain) {
+    if (this.range) {
+      const r = this.range, dx = pose[0] - r.c[0], dy = pose[1] - r.c[1];
+      const x = dx * r.left > 0 ? r.area.cx + gain * (dx / r.left) * (r.area.left - r.area.cx) : r.area.cx + gain * (dx / r.right) * (r.area.right - r.area.cx);
+      const y = dy * r.up > 0 ? r.area.cy + gain * (dy / r.up) * (r.area.top - r.area.cy) : r.area.cy + gain * (dy / r.down) * (r.area.bottom - r.area.cy);
+      return [x, y];
+    }
+    return this.map.map((row) => 0.5 + gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
   }
 
   // Recenter: make the direction the head points right now land on this screen point.
   recenter(pose, x = 0.5, y = 0.5) {
-    if (!this.map || !pose) return false;
-    const at = this.map.map((row) => 0.5 + this.gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
+    if (!this.ready || !pose) return false;
+    const at = this.project(pose);
     this.offset = [x - at[0], y - at[1]];
     this.shown = null;
     return true;
   }
-  get ready() { return !!this.map; }
 
-  // poses: head pose samples (means). targets: matching points in 0..1 screen units.
-  fit(poses, targets) { this.map = fitAffine(poses, targets); this.offset = [0, 0]; }
-
-  // One-step calibration: the pose the person holds now points at (x, y). The range is fixed and
-  // comfortable (radians of head turn for the full width and height), not however far they turned.
-  // On a camera, turning toward screen-left and tilting up both raise the angle, so both signs are -1.
+  // One-step calibration with a fixed range, kept for quick starts.
   center(pose, x = 0.5, y = 0.5, yawRange = 0.40, pitchRange = 0.26) {
     if (!pose) return false;
     this.map = [[-1 / yawRange, 0, x + pose[0] / yawRange], [0, -1 / pitchRange, y + pose[1] / pitchRange]];
-    this.offset = [0, 0]; this.shown = null;
+    this.range = null; this.offset = [0, 0]; this.shown = null;
     return true;
   }
 
   // Pose -> point in 0..1 screen units, smoothed and clamped.
   point(pose, t) {
-    if (!this.map || !pose) return null;
-    const v = [pose[0], pose[1], 1];
-    const raw = this.map.map((row, k) => 0.5 + this.gain * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] - 0.5) + this.offset[k]);
+    if (!this.ready || !pose) return null;
+    const raw = this.project(pose).map((v, k) => v + this.offset[k]);
     // Edge re-centering: turning past the edge slides the mapping along, so turning back moves the
     // cursor straight away. This sheds whatever offset posture has built up.
     for (let k = 0; k < 2; k++) {
@@ -96,10 +120,10 @@ export class HeadPointer {
   // Unsmoothed, unclamped screen point. Used to spot quick gestures such as a nod.
   // gain 1 means "in units of the person's own calibrated range", whatever the reach setting is.
   raw(pose, gain = this.gain) {
-    if (!this.map || !pose) return null;
-    return this.map.map((row, k) => 0.5 + gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5) + (gain === 1 ? 0 : this.offset[k]));
+    if (!this.ready || !pose) return null;
+    return this.project(pose, gain).map((v, k) => v + (gain === 1 ? 0 : this.offset[k]));
   }
 
-  toJSON() { return { map: this.map }; }
-  static from(o) { const p = new HeadPointer(); p.map = o?.map || null; return p; }
+  toJSON() { return { map: this.map, range: this.range }; }
+  static from(o) { const p = new HeadPointer(); p.map = o?.map || null; p.range = o?.range || null; return p; }
 }

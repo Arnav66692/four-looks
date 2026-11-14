@@ -29,7 +29,7 @@ export function runs(series, thr) {
 
 // rest: scores with a relaxed face. firm: one series per firm try. normal: one series of everyday behaviour.
 export function fitCue(cue, rest, firm, normal) {
-  const restTop = pct(rest, 0.95);
+  const restTop = pct(rest, 0.8);        // the 80th percentile: a brief stray movement while "relaxed" does not count
   const peak = median(firm.map((s) => Math.max(...s.map((x) => x.c))));
   if (!(peak > restTop + 0.08)) {
     return { ...DEFAULT_CUE, cue, ok: false, why: `the firm tries only reached ${peak.toFixed(2)} against ${restTop.toFixed(2)} relaxed` };
