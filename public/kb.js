@@ -13,13 +13,15 @@ const REACH_KEY = "fourlooks.reach.v1";
 const REACH_STEPS = [1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
 const STICKY = 0.2;                                     // margin (in key sizes) a fresh hover keeps
-const STICKY_LOCKED = 0.6;                              // margin once you have stayed on a key a moment
+const STICKY_LOCKED = 0.45;                             // margin once you have stayed on a key a moment
+const CORE = 0.2;                                       // the middle of a key: this far in from each edge
 const LOCK_MS = 250;                                    // time to grow from STICKY to STICKY_LOCKED
 const VOTE_MS = 350;                                    // a press goes to the key you were on most in this window
 const MAGNET = 0.35;                                    // how far the drawn cursor leans toward the key centre
 const PRIOR_POW = 0.5;                                  // how much likely next letters grow their hidden target
-const NOD_AMP = Number(params.get("nod") || 0.16);       // a nod dips the pointer at least this far (screen heights)
-const NOD_MS = 650;                                     // and comes back within this long
+const NOD_AMP = Number(params.get("nod") || 0.3);        // a nod dips at least this much of your calibrated up-down range
+const NOD_START = 0.07;                                 // a dip this big starts the nod clock
+const NOD_MS = 550;                                     // and the head is back within this long
 const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
 const CHIP_SLOTS = 4;
 const POINTER_KEY = "fourlooks.pointer.v1";
@@ -162,6 +164,8 @@ function renderStats() {
   $("stats").textContent = stats.presses ? `${m.wpm} wpm · ${m.keysSaved}% keys saved · ${m.undone}% undone` : "";
 }
 window.fourLooks.metrics = metrics;
+window.fourLooks.cursor = () => cursorAt;
+window.fourLooks.reach = () => pointer.gain;
 
 function noteFix() {
   const f = typer.lastFix;
@@ -359,10 +363,26 @@ function intended(t) {
   for (const [el, e] of tally) if (!best || e.ms > best.ms) best = { el, ms: e.ms, x: e.x / e.n, y: e.y / e.n };
   return best;
 }
+// Which key the pointer is on. While the settings panel is open only its tiles count, so nothing
+// underneath can be pressed through it. Sticky hover never holds a key in a different layer.
+function pickHover(x, y, t) {
+  const menuOpen = document.body.classList.contains("menu-open");
+  const inMenu = (el) => !!el && !!el.closest("#menu");
+  if (hoverEl && inMenu(hoverEl) !== menuOpen) return menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
+  const top = menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
+  // The lock holds through wobble at a key's edge, but a clear move into the middle of another key wins.
+  if (stillOn(hoverEl, x, y, t) && !(top && top !== hoverEl && inCore(top, x, y))) return hoverEl;
+  return top;
+}
+function inCore(el, x, y) {
+  const r = el.getBoundingClientRect(), mx = CORE * r.width, my = CORE * r.height;
+  return x > r.left + mx && x < r.right - mx && y > r.top + my && y < r.bottom - my;
+}
+const onlyMenu = (el) => (el && el.closest("#menu") ? el : null);
 function setFill(el, p) { if (el) el.style.setProperty("--p", String(p)); }
 function movePointer(x, y, t) {
   cursorAt = [x, y];
-  const el = stillOn(hoverEl, x, y, t) ? hoverEl : keyAt(x, y);
+  const el = pickHover(x, y, t);
   history.push({ t, el, x, y });
   while (history.length && t - history[0].t > VOTE_MS * 2) history.shift();
   let dx = x, dy = y;
@@ -390,23 +410,25 @@ function movePointer(x, y, t) {
   $("ring").style.strokeDashoffset = String(100.5 * (1 - progress));
 }
 
-// ---------- nod: a quick dip and return of the head accepts the grey guess ----------
+// ---------- nod: a quick, clear dip and return of the head accepts the grey guess ----------
+// Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
+// two never counts: a nod has to dip at least NOD_AMP of that range and be back within NOD_MS.
 const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, last: 0 };
 function detectNod(f) {
-  const raw = pointer.raw(f.pose);
+  const raw = pointer.raw(f.pose, 1);
   if (!raw) return;
   const [x, y] = raw;
   if (nod.rest == null) { nod.rest = y; nod.restX = x; return; }
   const dy = y - nod.rest;
   if (nod.state === "rest") {
-    if (dy > NOD_AMP && f.t - nod.last > 700) { nod.state = "down"; nod.since = f.t; nod.peak = dy; }
-    else { nod.rest += 0.12 * (y - nod.rest); nod.restX += 0.12 * (x - nod.restX); }
-  } else {
-    nod.peak = Math.max(nod.peak, dy);
-    const sideways = Math.abs(x - nod.restX) > 0.6 * nod.peak;
-    if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; }   // a real move, not a nod
-    else if (dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; acceptGhost("nod"); }
+    if (dy > NOD_START && f.t - nod.last > 700) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; }
+    else { nod.rest += 0.15 * (y - nod.rest); nod.restX += 0.15 * (x - nod.restX); }
+    return;
   }
+  nod.peak = Math.max(nod.peak, dy);
+  const sideways = Math.abs(x - nod.restX) > 0.5 * Math.max(nod.peak, NOD_START);
+  if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; return; }   // a real move
+  if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; acceptGhost("nod"); }
 }
 
 // ---------- camera ----------
@@ -522,7 +544,10 @@ async function startCamera() {
   if (usingCamera) return;
   prompt("Starting the camera.");
   try {
-    await startFace($("video"), onFrame);
+    if (params.get("sim")) {             // simulated face, for testing the camera path without a camera
+      const { startSimFace } = await import("./sim.js");
+      window.fourLooks.sim = startSimFace(onFrame, { cueName: () => cueCfg.cue });
+    } else await startFace($("video"), onFrame);
     usingCamera = true;
     refreshMenu();
     if (pointer.ready) prompt(LIVE ? `Ready. Click into any text box, then ${CUES[cueCfg.cue].name} to press keys.` : `Ready. ${CUES[cueCfg.cue].name} to press keys.`);
@@ -574,7 +599,11 @@ function refreshMenu() {
     if (el) el.textContent = it.value();
   }
 }
-function toggleMenu(open = !document.body.classList.contains("menu-open")) { document.body.classList.toggle("menu-open", open); }
+function toggleMenu(open = !document.body.classList.contains("menu-open")) {
+  document.body.classList.toggle("menu-open", open);
+  history.length = 0;                       // old hover votes belong to the other layer
+  record("menu", { open });
+}
 function runSetting(id) {
   const it = SETTINGS.find((x) => x.id === id);
   if (!it) return;

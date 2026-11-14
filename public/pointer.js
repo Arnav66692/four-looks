@@ -65,9 +65,10 @@ export class HeadPointer {
   }
 
   // Unsmoothed, unclamped screen point. Used to spot quick gestures such as a nod.
-  raw(pose) {
+  // gain 1 means "in units of the person's own calibrated range", whatever the reach setting is.
+  raw(pose, gain = this.gain) {
     if (!this.map || !pose) return null;
-    return this.map.map((row) => 0.5 + this.gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
+    return this.map.map((row) => 0.5 + gain * (row[0] * pose[0] + row[1] * pose[1] + row[2] - 0.5));
   }
 
   toJSON() { return { map: this.map }; }
