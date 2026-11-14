@@ -180,7 +180,9 @@ export class KeyTyper {
     if (!this.pending.length) {
       const succ = this.dec.bigrams.get(this.history());
       if (!succ) return [];
-      return [...succ.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id]) => this.caseNext(this.dec.words[id]));
+      // Do not offer a word the person used in the last two words ("I am I").
+      const recent = new Set(this.committed.toLowerCase().trim().split(/\s+/).slice(-2));
+      return [...succ.entries()].sort((a, b) => b[1] - a[1]).filter(([id]) => !recent.has(this.dec.words[id])).slice(0, n).map(([id]) => this.caseNext(this.dec.words[id]));
     }
     const best = this.bestWord();
     const typed = this.exactCase(this.typedWord());

@@ -270,6 +270,7 @@ function acceptGhost(how) {
 window.fourLooks.offset = () => pointer.offset;
 // The guided test borrows the pointer, the press move and the nod while it runs.
 const study = { capture: false, onPress: null, onNod: null, watchers: new Set() };
+let lastTrace = 0;
 let phraseRest = [], phraseAt = 0;                         // the rest of the grey phrase, for a second nod
 const DOUBLE_NOD_MS = 1100;
 let pendingFix = null;
@@ -584,6 +585,10 @@ function onFrame(f) {
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
   detectNod(f);
   detectFlick(f);
+  if (f.t - lastTrace > 100) {                 // a light trace of every session: where the cursor is, where the head points, what is selected
+    lastTrace = f.t;
+    record("p", { x: Math.round(cursorAt?.[0] ?? -1), y: Math.round(cursorAt?.[1] ?? -1), yaw: +f.pose[0].toFixed(4), pitch: +f.pose[1].toFixed(4), on: hoverEl ? (hoverEl.dataset.word ? "chip" : hoverEl.dataset.key) : "", c: +c.toFixed(2) });
+  }
   study.watchers.forEach((w) => w(f, { cursor: cursorAt, score: c }));
   if (cueCfg.calibrated && c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
