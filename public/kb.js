@@ -26,7 +26,7 @@ const NOD_MS = 550;                                     // and the head is back 
 const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
 const CHIP_SLOTS = 5;
 const CHIP_ORDER = [3, 1, 0, 2, 4];     // slot -> guess rank: the best guess sits in the middle of the row
-const POINTER_KEY = "fourlooks.pointer.v2";      // v2: one-step centring with a fixed comfortable range
+const POINTER_KEY = "fourlooks.pointer.v3";      // v3: calibrated to the person's own comfortable range
 const HOLD_KEY = "fourlooks.hold.v1";
 const WORDS_KEY = "fourlooks.words.v1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -737,8 +737,9 @@ async function startStudy() {
   } finally { study.capture = false; box.style.display = "none"; studyRunning = false; }
 }
 window.fourLooks.startStudy = startStudy;
-let faceSince = 0;
+let faceSince = 0, cueTried = false;
 setInterval(() => {                         // no calibration yet: start one once a face has been in view for a second
+  if (usingCamera && pointer.ready && !calibrating && !cueCfg.calibrated && !holdToPress && !cueTried && lastFrame?.face) { cueTried = true; calibrateCue(); return; }
   if (!usingCamera || pointer.ready || calibrating) { faceSince = 0; return; }
   const seen = lastFrame?.face && performance.now() - lastFrame.t < 500;
   if (!seen) { faceSince = 0; prompt("Sit in front of the camera. Calibration starts when it sees you."); return; }
