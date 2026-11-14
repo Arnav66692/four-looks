@@ -416,10 +416,10 @@ html.theming, html.theming body, html.theming body::before, html.theming * {
 /* =====================================================================================
    Head-centred layout: the busiest letter key sits where the head rests, the rest ring it.
    ===================================================================================== */
-body.centred #keys { grid-template-rows: 1fr 1.12fr 1fr .6fr; }
-body.centred .row .key.fn { flex: .62; }
-body.centred .row .key.group, body.centred .row .key.space { flex: 1.25; }
-body.centred .row:last-child .key { flex: 1; font-size: clamp(14px, 1.5vw, 22px); }
+body.centred #keys { grid-template-rows: 1fr 1fr 1fr .62fr; }
+body.centred .row .key, body.centred .row .key.fn, body.centred .row .key.space, body.centred .row .key.send { flex: 1; }
+body.centred .row .key.group { font-size: clamp(26px, 3.4vw, 52px); }
+body.centred .row:last-child .key { font-size: clamp(14px, 1.5vw, 22px); }
 
 /* guesses: one row at the top, the best one in the middle and bold */
 #chips { grid-template-columns: 1fr 1fr 1.5fr 1fr 1fr; }

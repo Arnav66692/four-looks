@@ -59,15 +59,15 @@ const LAYOUTS = {
     ["shift", ..."gwulcmfy", ",", ".", "?"],
     ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
-  // Boxes: built around where the head rests, not where hands rest. Share of English letters by key:
-  // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
-  // middle. Turning is easier than nodding, so the next two sit left and right. Space, the most pressed
-  // key of all, is straight below. The rare keys take the top corners.
+  // Boxes, in phone-pad order: read left to right, top to bottom, a to z. Eight big keys with three or
+  // four letters each, and the word guesser works out which letter was meant (97.9% first guess on the
+  // dev sentences, tools/bigkeys-eval.mjs). The first box layout was arranged by letter frequency and
+  // he found it random. This one has nothing to hunt for.
   big: [
-    ["⌫", "g:jkl", "g:pqrs", "g:wxyz", "send"],
-    ["undo", "g:mno", "g:def", "g:ghi", "speak"],
-    ["123", "g:tuv", "space", "g:abc", "menu"],
-    ["shift", ",", ".", "?", "'", "fix", "layout", "mouse"],
+    ["g:abc", "g:def", "g:ghi", "⌫"],
+    ["g:jkl", "g:mno", "g:pqrs", "send"],
+    ["g:tuv", "g:wxyz", "space", "undo"],
+    ["shift", "123", "menu", "mouse", "'", ",", ".", "?", "fix", "speak"],
   ],
   sym: [
     [..."1234567890", "⌫"],
@@ -100,7 +100,7 @@ window.fourLooks = { log };
 
 let typer = null;
 const LAYOUT_KEY = "fourlooks.layout.v3";
-const LETTER_LAYOUTS = ["head", "abc"];               // head-arranged letters and QWERTY. One letter per key, always.
+const LETTER_LAYOUTS = ["head", "big", "abc"];        // head-arranged letters, boxes (phone-pad order), and QWERTY
 const LAYOUT_NAME = { head: "head", abc: "qwerty", big: "boxes" };
 let letters = (() => { try { const v = JSON.parse(localStorage.getItem(LAYOUT_KEY)); return LETTER_LAYOUTS.includes(v) ? v : "head"; } catch { return "head"; } })();
 let layer = letters;
@@ -768,7 +768,7 @@ async function enterGrokMode(why) {
   if (mode === "mouse") await setMode("keyboard", "grok");
   toggleMenu(false);
   typer.commitWord(); grokStash = typer.committed; typer.clear();      // what you were writing waits, untouched
-  grokMode = true;
+  grokMode = true; typer.autoSpace = false;      // commands can hold web addresses
   document.body.classList.add("grokcmd");
   record("grok-mode", { on: true, why });
   tick();
@@ -777,7 +777,7 @@ async function enterGrokMode(why) {
 }
 function exitGrokMode() {
   if (!grokMode) return;
-  grokMode = false;
+  grokMode = false; typer.autoSpace = true;
   document.body.classList.remove("grokcmd");
   typer.clear(); typer.committed = grokStash; grokStash = "";
   updateKeys(); renderText(); updatePrior();
@@ -796,6 +796,9 @@ const APP_COMMANDS = [
   [/^(help|guide|what can (you|i) do)$/i, () => toggleHelp(true)],
   [/^(re)?calibrate$/i, () => calibrate()],
   [/^(mouse|mouse mode|use the mouse)$/i, () => setMode("mouse")],
+  [/^(boxes|box|box keys|big keys)$/i, () => setLayout("big")],
+  [/^(qwerty|normal keyboard)$/i, () => setLayout("abc")],
+  [/^(head|head keys|head layout)$/i, () => setLayout("head")],
   [/^(next |change )?theme$/i, () => { runSetting("theme"); prompt(`Theme: ${theme}`); }],
   [/^tune( to me)?$/i, () => startStudy("tune")],
   [/^(hold|hold to press)$/i, () => { runSetting("hold"); prompt(`Hold to press is ${holdToPress ? "on" : "off"}.`); }],
@@ -1194,6 +1197,14 @@ function saveLog() {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = `four-looks-session-${Date.now()}.json`; a.click();
 }
+function setLayout(name) {
+  if (!LETTER_LAYOUTS.includes(name)) return;
+  letters = name; layer = name;
+  store(LAYOUT_KEY, letters);
+  record("layout", { letters });
+  buildKeys(); renderText(); updatePrior();
+  prompt(name === "big" ? "Boxes: press the box that holds your letter. The word is worked out for you." : `Keys: ${LAYOUT_NAME[name]}.`);
+}
 const HELP_KEY = "fourlooks.help.v1";
 const HELP_HTML = `<div class="help">
   <section><h3>Type</h3><ul>
@@ -1214,7 +1225,7 @@ const HELP_HTML = `<div class="help">
     <li>Type what you want, or pick one on top.</li>
     <li>Press do it. Try: open gmail.</li>
     <li>Nod is yes. Shake is no, or stop.</li>
-    <li>Also works: help, calibrate, mouse mode, theme, quit.</li>
+    <li>Also works: help, calibrate, mouse mode, boxes, qwerty, theme, quit.</li>
   </ul></section>
   <section><h3>Mouse</h3><ul>
     <li>Press mouse. Your head moves the real cursor.</li>
@@ -1242,7 +1253,7 @@ const SETTINGS = [
     prompt(`Press move is now ${CUES[cueCfg.cue].name}. Choose Calibrate to fit it to you.`);
   } },
   { id: "presshold", label: "Press hold", value: () => pressName, run: () => { const names = Object.keys(PRESS_STEPS); pressName = names[(names.indexOf(pressName) + 1) % names.length]; pressExtra = PRESS_STEPS[pressName]; store(PRESS_KEY, pressName); } },
-  { id: "layout", label: "Key layout", value: () => LAYOUT_NAME[letters], run: () => { letters = LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); renderText(); } },
+  { id: "layout", label: "Key layout", value: () => LAYOUT_NAME[letters], run: () => setLayout(LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]) },
   { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = REACH_STEPS.includes(pointer.gain) ? cycle(REACH_STEPS, pointer.gain) : 1; store(REACH_KEY, pointer.gain); } },
   { id: "dwell", label: "Hold time", value: () => `${DWELL / 1000} s`, run: () => { DWELL = DWELL_STEPS[(DWELL_STEPS.indexOf(DWELL) + 1) % DWELL_STEPS.length]; store(DWELL_KEY, DWELL); holdP = 0; } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },

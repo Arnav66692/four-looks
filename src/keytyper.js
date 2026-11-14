@@ -6,6 +6,7 @@ export const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const LOG10 = Math.log(10);
 const OOV_PRIOR = -7.0;          // log10 word-model score given to a word the dictionary lacks
 const LEARNED_PRIOR = -3.5;      // log10 score of a word from the person's own list
+const WEB_ENDS = new Set(["com", "org", "net", "edu", "gov", "io", "ai", "co", "app", "dev", "us", "uk"]);
 const USED_BOOST = 0.35;      // how much a word this person has used before rises (log10 units per tenfold use)
 const ADDED_APOSTROPHE = -1.0;   // cost of a dictionary word adding an apostrophe you did not type
 const RAW_CHARS = /[@#:/$_\-0-9+=&%*]/;   // once one of these is in a token, nothing in it is corrected
@@ -19,6 +20,8 @@ export class KeyTyper {
     this.shift = "once";     // off | once | lock. Starts capitalised.
     this.raw = false;        // inside an email, link, tag, time or number
     this.learned = new Set();
+    this.autoSpace = true;   // put a space after punctuation without being asked
+    this.autoDot = false;    // the last thing added was a full stop and its automatic space
     this.used = new Map();   // how often this person has used each word: their words rise in the guesses
     this.undoStack = [];
     this.lastFix = null;     // { from, to } when autocorrect last changed a word
@@ -71,8 +74,21 @@ export class KeyTyper {
     }
     if (RAW_CHARS.test(str)) this.raw = true;
     this.commitWord();
-    if (/^[.,!?;:]$/.test(str) && this.committed.endsWith(" ") && !this.raw) this.committed = this.committed.slice(0, -1);
+    const mark = /^[.,!?;:]$/.test(str) && !this.raw;
+    if (mark && this.committed.endsWith(" ")) this.committed = this.committed.slice(0, -1);      // "word ." becomes "word."
     this.committed += str;
+    // Auto space: a comma, full stop, question mark and the like are followed by a space without asking,
+    // and the next sentence starts with a capital. Off while a command for Grok is typed (web addresses).
+    // A full stop only gets its space after a word the dictionary knows, so names and web addresses
+    // such as sandhacks.devpost.com are left in one piece.
+    const before = this.committed.slice(0, -1).split(/\s+/).pop().toLowerCase().replace(/[^a-z']/g, "");
+    const known = this.dec.idOf(before) >= 0 || this.learned.has(before);
+    this.autoDot = false;
+    if (mark && this.autoSpace && this.committed.length > 1 && (str !== "." || known)) {
+      this.committed += " ";
+      this.autoDot = str === ".";
+      if (SENTENCE_END.test(this.committed)) this.shift = "once";
+    }
   }
 
   backspace() {
@@ -214,7 +230,15 @@ export class KeyTyper {
 
   commitWord() {
     if (!this.pending.length) return;
-    const typed = this.exactCase(this.typedWord()), best = this.bestWord();
+    let typed = this.exactCase(this.typedWord()), best = this.bestWord();
+    // The end of a web address: google. + com is put back together as google.com, and whatever follows a
+    // full stop with no space (devpost.com, name.surname) is kept exactly as typed, never autocorrected.
+    const tld = WEB_ENDS.has(typed.toLowerCase());
+    if (!this.groupMode() && ((this.autoDot && tld) || /[a-z0-9]\.$/i.test(this.committed))) {
+      if (this.autoDot && tld) this.committed = this.committed.slice(0, -1);
+      typed = best = typed.toLowerCase();
+    }
+    this.autoDot = false;
     this.lastFix = best !== typed && !this.groupMode() ? { from: typed, to: best } : null;
     this.noteUse(best);
     this.committed += best;
