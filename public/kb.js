@@ -177,6 +177,7 @@ function renderText() {
   $("typing").textContent = typer.typingDisplay();
   const g = typer.ghost();
   $("ghost").textContent = g ? g.tail : "";
+  $("ghostmore").textContent = g && g.more.length ? ` ${g.more.join(" ")}` : "";
   $("textbox").classList.toggle("empty", !typer.text());
   $("textbox").scrollTop = $("textbox").scrollHeight;
   const sugg = typer.suggestions(3);
@@ -240,10 +241,24 @@ function acceptGhost(how) {
   if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
+  // Two nods close together take the whole grey phrase: the second nod takes the words shown after the first.
+  if (how === "nod" && phraseRest.length && performance.now() - phraseAt < DOUBLE_NOD_MS && !typer.pending.length) {
+    const before = typer.text().length;
+    typer.save();
+    const rest = phraseRest; phraseRest = [];
+    for (const w of rest) typer.pick(w);
+    tick();
+    record("ghost-phrase", { words: rest });
+    countInput("ghost", before);
+    updateKeys(); renderText(); updatePrior(); mirror();
+    return true;
+  }
   if (!typer.ghost()) return false;
   const before = typer.text().length;
   typer.save();
-  const word = typer.acceptGhost();
+  const taken = typer.acceptGhost();
+  const word = taken.word;
+  phraseRest = taken.more; phraseAt = performance.now();
   tick();
   record("ghost", { word, how });
   countInput("ghost", before);
@@ -255,6 +270,8 @@ function acceptGhost(how) {
 window.fourLooks.offset = () => pointer.offset;
 // The guided test borrows the pointer, the press move and the nod while it runs.
 const study = { capture: false, onPress: null, onNod: null, watchers: new Set() };
+let phraseRest = [], phraseAt = 0;                         // the rest of the grey phrase, for a second nod
+const DOUBLE_NOD_MS = 1100;
 let pendingFix = null;
 let lastPress = null;                  // top letters of the last key press, for the admin view
 async function askFix() {
@@ -449,6 +466,8 @@ function pickHover(x, y, t) {
   if (hoverEl && inMenu(hoverEl) !== menuOpen) return menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
   const top = menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
   // The lock holds through wobble at a key's edge, but a clear move into the middle of another key wins.
+  const zone = (el) => (el ? (el.closest("#chips") ? "chips" : el.closest("#keys") ? "keys" : "other") : null);
+  if (top && hoverEl && zone(top) !== zone(hoverEl)) return top;      // the lock never reaches from a key into the suggestions, or back
   if (stillOn(hoverEl, x, y, t) && !(top && top !== hoverEl && inCore(top, x, y))) return hoverEl;
   return top;
 }
@@ -499,7 +518,7 @@ function detectNod(f) {
   if (nod.rest == null) { nod.rest = y; nod.restX = x; return; }
   const dy = y - nod.rest;
   if (nod.state === "rest") {
-    if (dy > NOD_START && f.t - nod.last > 700) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; }
+    if (dy > NOD_START && f.t - nod.last > 400) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; }
     else { nod.rest += 0.15 * (y - nod.rest); nod.restX += 0.15 * (x - nod.restX); }
     return;
   }
@@ -507,6 +526,29 @@ function detectNod(f) {
   const sideways = Math.abs(x - nod.restX) > 0.5 * Math.max(nod.peak, NOD_START);
   if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; return; }   // a real move
   if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; acceptGhost("nod"); }
+}
+
+// ---------- shake: one quick left-right flick of the head steps the grey guess to the next option ----------
+const FLICK_AMP = 0.2, FLICK_MS = 420;
+const flick = { rest: null, state: "rest", since: 0, peak: 0, last: 0 };
+function detectFlick(f) {
+  const raw = pointer.raw(f.pose, 1);
+  if (!raw || study.capture) return;
+  const x = raw[0];
+  if (flick.rest == null) { flick.rest = x; return; }
+  const dx = x - flick.rest;
+  if (flick.state === "rest") {
+    if (Math.abs(dx) > 0.08 && f.t - flick.last > 600) { flick.state = "out"; flick.since = f.t; flick.peak = dx; }
+    else flick.rest += 0.15 * (x - flick.rest);
+    return;
+  }
+  if (Math.abs(dx) > Math.abs(flick.peak)) flick.peak = dx;
+  if (f.t - flick.since > FLICK_MS) { flick.state = "rest"; flick.rest = x; return; }            // a real move
+  if (Math.abs(flick.peak) >= FLICK_AMP && Math.abs(dx) < 0.35 * Math.abs(flick.peak)) {
+    flick.state = "rest"; flick.last = f.t;
+    const g = typer?.ghost();
+    if (g && g.options > 1) { typer.nextGhost(); tick(); record("ghost-next", {}); renderText(); }
+  }
 }
 
 // ---------- camera ----------
@@ -541,6 +583,7 @@ function onFrame(f) {
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
   detectNod(f);
+  detectFlick(f);
   study.watchers.forEach((w) => w(f, { cursor: cursorAt, score: c }));
   if (cueCfg.calibrated && c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;

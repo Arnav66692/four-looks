@@ -39,6 +39,7 @@ export class KeyTyper {
 
   // group: the press came from a big key holding several letters, so the letters themselves are unknown.
   letter(probs, { group = false } = {}) {
+    this.alt = 0;
     const char = LETTERS[probs.indexOf(Math.max(...probs))];
     this.pending = [...this.pending, { probs, char, upper: this.shift !== "off", group }];
     if (this.shift === "once") this.shift = "off";
@@ -83,7 +84,23 @@ export class KeyTyper {
   // What to show for the word in progress: the letters as typed, or with big keys the best guess so far.
   typingDisplay() {
     if (!this.pending.length) return "";
-    return this.groupMode() ? this.bestWord() : this.exactCase(this.typedWord());
+    if (this.groupMode()) return this.bestWord();
+    return this.likelyLetters();
+  }
+
+  // The letters shown while a word is in progress. A press that landed on a neighbouring key shows the
+  // letter the word guesser believes, so a near miss does not look like a mistake that needs deleting.
+  likelyLetters() {
+    const typed = this.exactCase(this.typedWord());
+    const slots = this.letterSlots();
+    if (this.raw || this.deliberateCase() || !slots.length) return typed;
+    const probs = slots.map((p) => p.probs), hist = this.history();
+    const best = [...this.ranked(2), ...this.dec.completeWord(probs, hist, { top: 2 })].sort((x, y) => y.score - x.score)[0];
+    if (!best || best.typed) return typed;
+    // Keep any apostrophes the person typed, and take the believed letters for the letter positions.
+    const letters = best.word.replace(/[^a-z]/g, "");
+    let k = 0;
+    return this.pending.map((p) => { if (!p.probs) return p.char; const c = letters[k++] || p.char; return p.upper ? c.toUpperCase() : c; }).join("").replace(/^i('|$)/, (m) => "I" + m.slice(1));
   }
   letterSlots() { return this.pending.filter((p) => p.probs); }
 
@@ -193,29 +210,52 @@ export class KeyTyper {
     return this.dec.completeWord(slots.map((p) => p.probs), this.history(), { top: n }).map((c) => this.caseLike(c.word));
   }
 
-  // Grey text offered after the cursor: the rest of the likeliest word, or the likeliest next word.
-  ghost() {
-    if (this.pending.length) {
-      const c = this.completions(1)[0];
-      if (!c) return null;
-      const shown = this.typingDisplay();
-      // Only offer grey text that continues what is on screen.
-      return c.toLowerCase().startsWith(shown.toLowerCase()) ? { word: c, tail: c.slice(shown.length) } : null;
+  // The words most likely to follow a word, one after another (a short phrase guess).
+  chain(word, n = 2) {
+    const out = [];
+    let id = this.dec.idOf(word.toLowerCase());
+    const seen = new Set([id]);
+    for (let k = 0; k < n && id >= 0; k++) {
+      const succ = this.dec.bigrams.get(id);
+      if (!succ) break;
+      let best = -1, bestLp = -Infinity;
+      for (const [w, lp] of succ) if (lp > bestLp && !seen.has(w)) { best = w; bestLp = lp; }      // never loop back to a word already in the phrase
+      if (best < 0) break;
+      const next = this.dec.words[best];
+      out.push(/^i('|$)/.test(next) ? "I" + next.slice(1) : next);
+      id = best; seen.add(best);
     }
-    if (!this.committed || !/\s$/.test(this.committed)) return null;
-    const next = this.suggestions(1)[0];
-    return next ? { word: next, tail: next } : null;
+    return out;
   }
+
+  // Grey text offered after the cursor: the rest of the likeliest word (or the likeliest next word),
+  // plus the words likely to follow. this.alt steps through other first words (a head shake).
+  ghost() {
+    let options;
+    if (this.pending.length) {
+      const shown = this.typingDisplay().toLowerCase();
+      options = this.completions(3).filter((c) => c.toLowerCase().startsWith(shown));     // only text that continues what is on screen
+    } else {
+      if (!this.committed || !/\s$/.test(this.committed)) return null;
+      options = this.suggestions(3);
+    }
+    if (!options.length) return null;
+    const word = options[(this.alt || 0) % options.length];
+    const shownLen = this.pending.length ? this.typingDisplay().length : 0;
+    return { word, tail: word.slice(shownLen), more: this.chain(word, 2), options: options.length };
+  }
+  nextGhost() { this.alt = (this.alt || 0) + 1; }
 
   acceptGhost() {
     const g = this.ghost();
     if (!g) return null;
     this.pick(g.word);
-    return g.word;
+    return g;
   }
 
   // Take a chip. Picking the exact typed letters teaches the keyboard that word.
   pick(word) {
+    this.alt = 0;
     if (this.pending.length && word === this.exactCase(this.typedWord()) && this.dec.idOf(word.toLowerCase()) < 0) this.learn([word]);
     this.pending = [];
     this.committed += word + " ";

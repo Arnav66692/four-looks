@@ -435,3 +435,11 @@ body.cue-test #cuebar::before { content: ""; position: absolute; inset: 0; width
 
 /* head-arranged letters: three letter rows of equal keys */
 .key[data-key="layout"] { font-size: clamp(11px, 1.1vw, 15px); }
+
+/* suggestions get their own clear band: taller, and a gap before the keys */
+body { grid-template-rows: minmax(64px, 17vh) minmax(64px, 14vh) minmax(0, 1fr) auto; }
+body.admin { grid-template-rows: 248px minmax(60px, 12vh) minmax(64px, 12vh) minmax(0, 1fr) auto; }
+#chips { margin-bottom: 10px; gap: 10px; }
+#chips [data-key] { background: color-mix(in srgb, var(--panel) 80%, transparent); box-shadow: inset 0 0 0 1px var(--key-edge); }
+#chips [data-key].empty { box-shadow: none; background: none; }
+#ghostmore { color: var(--muted); opacity: .45; }
