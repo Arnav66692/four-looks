@@ -38,7 +38,7 @@ export async function startFace(video, onFrame) {
         const head = [(lm[NOSE].x - mid.x) / eye, (lm[NOSE].y - mid.y) / eye];
         const scores = {};
         for (const c of r.faceBlendshapes?.[0]?.categories || []) scores[c.categoryName] = c.score;
-        onFrame({ t, head, pose: poseOf(r.facialTransformationMatrixes?.[0]?.data), scores, face: true });
+        onFrame({ t, head, pose: poseOf(r.facialTransformationMatrixes?.[0]?.data), scores, lm, face: true });
       } else {
         onFrame({ t, head: null, scores: {}, face: false });
       }

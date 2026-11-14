@@ -4,6 +4,7 @@ import { KeyTyper, LETTERS } from "/src/keytyper.js";
 import { startFace } from "./face.js";
 import { HeadPointer } from "./pointer.js";
 import { CUES, CUE_ORDER, DEFAULT_CUE, fitCue } from "./blink.js";
+import { createAdmin } from "./admin.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -214,6 +215,7 @@ function acceptGhost(how) {
 
 // ---------- Grok check: grammar and sense, through the local server (needs XAI_API_KEY in .env) ----------
 let pendingFix = null;
+let lastPress = null;                  // top letters of the last key press, for the admin view
 async function askFix() {
   if (pendingFix) { applyFix(); return; }
   typer.commitWord();
@@ -261,7 +263,9 @@ function press(el, x, y) {
     store(WORDS_KEY, [...typer.learned]);
     record("pick", { word: el.dataset.word });
   } else if (k.length === 1 && LETTERS.includes(k)) {
-    typer.letter(letterProbs(x, y));
+    const probs = letterProbs(x, y);
+    lastPress = probs.map((p, i) => [LETTERS[i], p]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    typer.letter(probs);
     record("letter", { key: k });
   } else if (k === "space") { typer.literal(" "); record("space"); }
   else if (k === "⌫") { typer.backspace(); record("backspace"); }
@@ -346,6 +350,11 @@ function updatePrior() {
   }
   const z = w.reduce((a, b) => a + b, 0);
   letterPrior = z > 0 ? w.map((v) => v / z) : null;
+  const peak = letterPrior ? Math.max(...letterPrior) : 0;
+  document.querySelectorAll("#keys [data-key]").forEach((el) => {      // admin view tints keys by how likely they are next
+    const i = el.dataset.key.length === 1 ? LETTERS.indexOf(el.dataset.key) : -1;
+    el.style.setProperty("--prior", i >= 0 && peak > 0 ? String(letterPrior[i] / peak) : "0");
+  });
 }
 
 const letterEls = () => document.querySelectorAll("#keys [data-key]");
@@ -463,6 +472,7 @@ function onFrame(f) {
   const c = f.face ? CUES[cueCfg.cue].score(f.scores) : 0;
   $("meter").style.setProperty("--c", String(c));
   $("meter").style.setProperty("--thr", String(cueCfg.thr));
+  if (adminOn && admin) drawAdmin(f, c);
   const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
   if (shut && !calibrating) {
     if (eyesShutSince == null) eyesShutSince = f.t;
@@ -588,6 +598,38 @@ function applyTheme() {
 }
 applyTheme();
 pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1.3;
+// ---------- camera view and admin view ----------
+const flag = (key, fallback) => { try { const v = JSON.parse(localStorage.getItem(key)); return typeof v === "boolean" ? v : fallback; } catch { return fallback; } };
+let camView = flag("fourlooks.camview.v1", true);
+let adminOn = params.get("admin") === "1" || flag("fourlooks.admin.v1", false);
+let admin = null;
+function applyViews() {
+  document.body.classList.toggle("camview", camView && !adminOn);
+  document.body.classList.toggle("admin", adminOn);
+  if (adminOn && !admin) admin = createAdmin($("admin"), $("video"));
+  window.fourLooksOut?.resize?.(adminOn ? 0.9 : 0.56);
+  requestAnimationFrame(() => { measure(); updatePrior(); });
+}
+function drawAdmin(f, c) {
+  const raw = pointer.raw(f.pose), unit = pointer.raw(f.pose, 1);
+  const dot = $("rawdot");
+  if (raw) { dot.style.display = "block"; dot.style.transform = `translate3d(${Math.min(1, Math.max(0, raw[0])) * innerWidth}px, ${Math.min(1, Math.max(0, raw[1])) * innerHeight}px, 0)`; }
+  const vote = intended(f.t);
+  const top = letterPrior ? letterPrior.map((p, i) => [LETTERS[i], p]).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([l, p]) => `${l.toUpperCase()} ${Math.round(100 * p)}%`).join(" ") : "";
+  const words = typer && typer.pending.length
+    ? [...typer.ranked(4), ...typer.dec.completeWord(typer.letterSlots().map((p) => p.probs), typer.history(), { top: 2 }).map((w) => ({ ...w, longer: true }))].sort((a, b) => b.score - a.score)
+    : [];
+  admin.draw(f, {
+    raw, shown: cursorAt ? [cursorAt[0] / innerWidth, cursorAt[1] / innerHeight] : null, reach: pointer.gain, calibrated: pointer.ready,
+    cue: { name: CUES[cueCfg.cue].name, score: c, thr: cueCfg.thr, freeze: cueCfg.freeze, needMs: cueCfg.ms, heldMs: blinkSince == null ? 0 : f.t - blinkSince },
+    nod: { state: nod.state, dip: unit && nod.rest != null ? Math.max(0, unit[1] - nod.rest) : 0, need: NOD_AMP, ms: NOD_MS },
+    eyesShutMs: eyesShutSince == null ? 0 : f.t - eyesShutSince,
+    hover: hoverEl ? (hoverEl.dataset.word || hoverEl.dataset.key) : "", lock: hoverEl ? Math.min(1, (f.t - hoverSince) / LOCK_MS) : 0,
+    vote: vote ? (vote.el.dataset.word || vote.el.dataset.key) : "", lastPress, nextLetters: top, words,
+  });
+}
+applyViews();
+
 const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
 function saveLog() {
   const blob = new Blob([JSON.stringify({ metrics: metrics(), log }, null, 2)], { type: "application/json" });
@@ -602,6 +644,8 @@ const SETTINGS = [
   } },
   { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = cycle(REACH_STEPS, pointer.gain) || 1; store(REACH_KEY, pointer.gain); } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
+  { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
+  { id: "admin", label: "Admin view", value: () => (adminOn ? "on" : "off"), run: () => { adminOn = !adminOn; store("fourlooks.admin.v1", adminOn); applyViews(); } },
   { id: "calibrate", label: "Calibrate", value: () => "pointer, then press move", run: () => { toggleMenu(false); calibrate(); } },
   { id: "camera", label: "Camera", value: () => (usingCamera ? "on" : "off"), run: () => startCamera() },
   { id: "clear", label: "Clear text", value: () => "", run: () => { typer.save(); typer.clear(); mirrored = ""; record("clear"); renderText(); updatePrior(); } },

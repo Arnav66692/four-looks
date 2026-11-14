@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld("fourLooksOut", {
   type: (text) => ipcRenderer.invoke("four-looks:type", text, false),
   edit: (deletes, text) => ipcRenderer.invoke("four-looks:type", text, false, deletes),
   enter: () => ipcRenderer.invoke("four-looks:type", "", true),
+  resize: (fraction) => ipcRenderer.invoke("four-looks:resize", fraction),
   quit: () => ipcRenderer.invoke("four-looks:quit"),
 });

@@ -31,6 +31,14 @@ function typeIntoFrontApp(text, pressReturn, deletes = 0) {
 const quit = (why) => { process.stdout.write(`four looks quit: ${why}\n`); app.quit(); };
 ipcMain.handle("four-looks:quit", () => quit("quit button"));
 
+ipcMain.handle("four-looks:resize", (e, fraction) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const f = Math.max(0.3, Math.min(0.95, Number(fraction) || 0.56));
+  const { workArea } = screen.getPrimaryDisplay();
+  const height = Math.round(workArea.height * f);
+  win?.setBounds({ x: workArea.x, y: workArea.y + workArea.height - height, width: workArea.width, height });
+});
+
 ipcMain.handle("four-looks:type", (_e, text, pressReturn, deletes = 0) => {
   if (typeof text !== "string" || text.length > 5000) return { ok: false, error: "bad text" };
   const n = Math.max(0, Math.min(500, Math.floor(Number(deletes) || 0)));
