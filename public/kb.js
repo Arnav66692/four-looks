@@ -32,17 +32,17 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "space", "undo", "fix", "speak", "clear"],
+    ["123", "menu", "space", "undo", "fix", "speak"],
   ],
   sym: [
     [..."1234567890", "⌫"],
     ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\"", "send"],
     ["#", "%", "*", "+", "=", "_", "!", ",", ".", "?"],
-    ["abc", "space", "undo", "fix", "speak", "clear"],
+    ["abc", "menu", "space", "undo", "fix", "speak"],
   ],
 };
-const FN = new Set(["⌫", "shift", "123", "abc", "speak", "clear", "undo", "fix"]);
-const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", clear: "clear", undo: "undo", fix: "fix" };
+const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu"]);
+const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", undo: "undo", fix: "fix", menu: "⋯" };
 
 const log = [];
 const record = (type, extra = {}) => log.push({ t: Date.now(), type, ...extra });
@@ -220,6 +220,8 @@ function press(el, x, y) {
   tick();
   el.classList.add("pressed");
   setTimeout(() => el.classList.remove("pressed"), 120);
+  if (k === "menu") { toggleMenu(); return; }
+  if (k.startsWith("set:")) { runSetting(k.slice(4)); return; }
   const before = typer.text().length;
   const edits = !["shift", "123", "abc", "speak", "undo", "fix"].includes(k);
   if (edits) typer.save();
@@ -241,9 +243,8 @@ function press(el, x, y) {
   else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : "abc"; buildKeys(); }
   else if (k === "speak") speak(false);
   else if (k === "send") send();
-  else if (k === "clear") { typer.clear(); mirrored = ""; record("clear"); }
   else { typer.literal(k); record("symbol", { key: k }); }
-  if (edits && k !== "send" && k !== "clear") countInput(k === "⌫" ? "undo" : "key", before);
+  if (edits && k !== "send") countInput(k === "⌫" ? "undo" : "key", before);
   noteFix();
   updateKeys();
   renderText();
@@ -409,7 +410,7 @@ function detectNod(f) {
 }
 
 // ---------- camera ----------
-let blinkSince = null, blinkFired = false;
+let blinkSince = null, blinkFired = false, eyesShutSince = null;
 function onFrame(f) {
   lastFrame = f;
   watchers.forEach((w) => w(f));
@@ -418,6 +419,11 @@ function onFrame(f) {
   const c = f.face ? CUES[cueCfg.cue].score(f.scores) : 0;
   $("meter").style.setProperty("--c", String(c));
   $("meter").style.setProperty("--thr", String(cueCfg.thr));
+  const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
+  if (shut && !calibrating) {
+    if (eyesShutSince == null) eyesShutSince = f.t;
+    else if (f.t - eyesShutSince > 3000) { eyesShutSince = null; toggleMenu(false); calibrate(); return; }
+  } else eyesShutSince = null;
   if (!f.face || calibrating || !pointer.ready) return;
   const closing = c > cueCfg.freeze;
   if (!closing) {
@@ -512,69 +518,85 @@ async function calibrateCue() {
   calibrating = false;
 }
 
-$("start").addEventListener("click", async () => {
-  $("start").disabled = true;
+async function startCamera() {
+  if (usingCamera) return;
   prompt("Starting the camera.");
   try {
     await startFace($("video"), onFrame);
     usingCamera = true;
-    prompt(pointer.ready ? (LIVE ? `Ready. Click into any text box, then ${CUES[cueCfg.cue].name} to press keys.` : `Ready. ${CUES[cueCfg.cue].name} to press keys.`) : "Press calibrate.");
+    refreshMenu();
+    if (pointer.ready) prompt(LIVE ? `Ready. Click into any text box, then ${CUES[cueCfg.cue].name} to press keys.` : `Ready. ${CUES[cueCfg.cue].name} to press keys.`);
+    else { prompt("First time here. Calibration starts in a moment."); setTimeout(() => { if (!calibrating && !pointer.ready) calibrate(); }, 1500); }
   } catch (err) {
-    prompt(`Camera failed: ${err.message}`);
-    $("start").disabled = false;
+    prompt(`Camera did not start (${err.message}). Open the menu and choose Camera.`);
   }
-});
-$("calibrate").addEventListener("click", () => { if (!calibrating) calibrate(); });
-function showCue() { $("cuebtn").textContent = `press with: ${CUES[cueCfg.cue].name}`; }
-$("cuebtn").addEventListener("click", () => {
-  if (calibrating) return;
-  const next = CUE_ORDER[(CUE_ORDER.indexOf(cueCfg.cue) + 1) % CUE_ORDER.length];
-  cueCfg = { ...DEFAULT_CUE, cue: next };
-  store(CUE_KEY, cueCfg);
-  showCue();
-  if (lastFrame) calibrateCue(); else prompt(`Press move is now ${CUES[next].name}. Start the camera to calibrate it.`);
-});
-showCue();
-function showReach() { $("reach").textContent = `reach ${pointer.gain}x`; }
-$("reach").addEventListener("click", () => {
-  pointer.gain = REACH_STEPS[(REACH_STEPS.indexOf(pointer.gain) + 1) % REACH_STEPS.length] || 1;
-  store(REACH_KEY, pointer.gain);
-  showReach();
-});
-pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1.3;
-showReach();
-const THEMES = ["auto", "launch", "obsidian", "carrara", "linen", "contrast"];
+}
+
+// ---------- settings: a side panel opened by the dots key, usable with the head pointer ----------
+const THEMES = ["launch", "obsidian", "carrara", "linen", "contrast", "auto"];
 let theme = (() => { try { const t = JSON.parse(localStorage.getItem("fourlooks.theme.v1")); return THEMES.includes(t) ? t : "launch"; } catch { return "launch"; } })();
-function showTheme() {
+function applyTheme() {
   if (theme === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
-  $("theme").textContent = `theme: ${theme}`;
   requestAnimationFrame(measure);
 }
-$("theme").addEventListener("click", () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]; store("fourlooks.theme.v1", theme); showTheme(); });
-showTheme();
-function showHold() { $("hold").textContent = holdToPress ? "hold to press: on" : "hold to press: off"; $("hold").classList.toggle("on", holdToPress); }
-$("hold").addEventListener("click", () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); showHold(); });
-showHold();
-if (window.fourLooksOut?.quit) { $("quit").hidden = false; $("quit").addEventListener("click", () => window.fourLooksOut.quit()); }
+applyTheme();
+pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1.3;
+const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
+function saveLog() {
+  const blob = new Blob([JSON.stringify({ metrics: metrics(), log }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `four-looks-session-${Date.now()}.json`; a.click();
+}
+const SETTINGS = [
+  { id: "theme", label: "Theme", value: () => theme, run: () => { theme = cycle(THEMES, theme); store("fourlooks.theme.v1", theme); applyTheme(); } },
+  { id: "cue", label: "Press with", value: () => CUES[cueCfg.cue].name, run: () => {
+    cueCfg = { ...DEFAULT_CUE, cue: cycle(CUE_ORDER, cueCfg.cue) }; store(CUE_KEY, cueCfg);
+    prompt(`Press move is now ${CUES[cueCfg.cue].name}. Choose Calibrate to fit it to you.`);
+  } },
+  { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = cycle(REACH_STEPS, pointer.gain) || 1; store(REACH_KEY, pointer.gain); } },
+  { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
+  { id: "calibrate", label: "Calibrate", value: () => "pointer, then press move", run: () => { toggleMenu(false); calibrate(); } },
+  { id: "camera", label: "Camera", value: () => (usingCamera ? "on" : "off"), run: () => startCamera() },
+  { id: "clear", label: "Clear text", value: () => "", run: () => { typer.save(); typer.clear(); mirrored = ""; record("clear"); renderText(); updatePrior(); } },
+  { id: "log", label: "Save session log", value: () => "for scoring", run: saveLog },
+  { id: "boxes", label: "4 box mode", value: () => "for four movements", run: () => { location.href = "/boxes.html"; } },
+  ...(window.fourLooksOut?.quit ? [{ id: "quit", label: "Quit", value: () => "", run: () => window.fourLooksOut.quit() }] : []),
+  { id: "close", label: "Close menu", value: () => "", run: () => toggleMenu(false) },
+];
+function buildMenu() {
+  $("menu").innerHTML = `<p class="hint">Close your eyes for 3 seconds to recalibrate at any time.</p>` + SETTINGS.map((it, i) =>
+    `<div class="tile" data-key="set:${it.id}" style="--i:${i}"><span class="name">${it.label}</span><span class="val"></span></div>`).join("");
+  refreshMenu();
+}
+function refreshMenu() {
+  for (const it of SETTINGS) {
+    const el = document.querySelector(`[data-key="set:${it.id}"] .val`);
+    if (el) el.textContent = it.value();
+  }
+}
+function toggleMenu(open = !document.body.classList.contains("menu-open")) { document.body.classList.toggle("menu-open", open); }
+function runSetting(id) {
+  const it = SETTINGS.find((x) => x.id === id);
+  if (!it) return;
+  it.run();
+  record("setting", { id });
+  refreshMenu();
+}
 
 // The mouse drives the same pointer when the camera is off, for testing and for mouse users.
 addEventListener("mousemove", (e) => { if (!usingCamera || !pointer.ready) movePointer(e.clientX, e.clientY, performance.now()); });
 addEventListener("mousedown", (e) => {
-  if (e.target.closest("#bar")) return;
   const el = keyAt(e.clientX, e.clientY);
   if (el && typer) { e.preventDefault(); press(el, e.clientX, e.clientY); armed = false; hoverSince = performance.now(); }
 });
 setInterval(() => { if (cursorAt && (!usingCamera || !pointer.ready)) movePointer(cursorAt[0], cursorAt[1], performance.now()); }, 33);
 addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); acceptGhost("tab"); } });
-$("stats").addEventListener("click", () => {     // save the session log for scoring
-  const blob = new Blob([JSON.stringify({ metrics: metrics(), log }, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = `four-looks-session-${Date.now()}.json`; a.click();
-});
+$("stats").addEventListener("click", saveLog);
 addEventListener("resize", measure);
 
 (async () => {
   buildKeys();
+  buildMenu();
   try {
     const model = await (await fetch("/lm.json")).json();
     typer = new KeyTyper(new Decoder(model, { groups: LETTER_GROUPS }));
@@ -582,7 +604,8 @@ addEventListener("resize", measure);
     updatePrior();
     window.fourLooks.typer = typer;
     updateKeys(); renderText();
-    prompt(usingCamera ? "" : "The mouse works now. Start the camera for head control.");
+    prompt("Ready. The mouse works too.");
+    startCamera();
   } catch (err) {
     prompt(`Word model failed to load: ${err.message}`);
   }
