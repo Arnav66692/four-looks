@@ -431,6 +431,15 @@ $("reach").addEventListener("click", () => {
 });
 pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1.3;
 showReach();
+const THEMES = ["auto", "launch", "obsidian", "carrara", "linen", "contrast"];
+let theme = (() => { try { const t = JSON.parse(localStorage.getItem("fourlooks.theme.v1")); return THEMES.includes(t) ? t : "launch"; } catch { return "launch"; } })();
+function showTheme() {
+  if (theme === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
+  $("theme").textContent = `theme: ${theme}`;
+  requestAnimationFrame(measure);
+}
+$("theme").addEventListener("click", () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]; store("fourlooks.theme.v1", theme); showTheme(); });
+showTheme();
 function showHold() { $("hold").textContent = holdToPress ? "hold to press: on" : "hold to press: off"; $("hold").classList.toggle("on", holdToPress); }
 $("hold").addEventListener("click", () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); showHold(); });
 showHold();
