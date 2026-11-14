@@ -5,6 +5,10 @@ import { app, BrowserWindow, globalShortcut, ipcMain, screen, session, systemPre
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+if (!app.requestSingleInstanceLock()) {
+  process.stdout.write("four looks is already running. Quit that one first (Control+Option+Q).\n");
+  app.exit(0);
+}
 process.env.PORT = process.env.PORT || "5174";
 await import("../server.js");
 
@@ -24,7 +28,8 @@ function typeIntoFrontApp(text, pressReturn, deletes = 0) {
   });
 }
 
-ipcMain.handle("four-looks:quit", () => app.quit());
+const quit = (why) => { process.stdout.write(`four looks quit: ${why}\n`); app.quit(); };
+ipcMain.handle("four-looks:quit", () => quit("quit button"));
 
 ipcMain.handle("four-looks:type", (_e, text, pressReturn, deletes = 0) => {
   if (typeof text !== "string" || text.length > 5000) return { ok: false, error: "bad text" };
@@ -53,8 +58,11 @@ async function createWindow() {
 }
 
 app.whenReady().then(() => {
-  globalShortcut.register("Control+Alt+Q", () => app.quit());   // the window never takes focus, so quit is global
+  globalShortcut.register("Control+Alt+Q", () => quit("Control+Option+Q"));   // the window never takes focus, so quit is global
   return createWindow();
 });
 app.on("will-quit", () => globalShortcut.unregisterAll());
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => quit("window closed"));
+app.on("render-process-gone", (_e, _wc, d) => process.stdout.write(`four looks page crashed: ${d.reason} ${d.exitCode}\n`));
+app.on("child-process-gone", (_e, d) => process.stdout.write(`four looks helper gone: ${d.type} ${d.reason}\n`));
+process.on("SIGTERM", () => quit("stopped from outside (SIGTERM)"));
