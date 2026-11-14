@@ -16,7 +16,7 @@ const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplificati
 const SIGMA = 0.45;                                     // press spread, in key widths
 const GAP = 0.2;                                        // the gap between keys belongs to the nearest key within this (key sizes)
 const EDGE_HAIR = 0.08;                                 // an unlocked key keeps this much past its edge, to stop flicker on a boundary
-const LOCK_AT = 0.5;                                    // a key locks once this share of the hold has been spent on it
+const LOCK_AT = 1 / 3;                                  // a key locks once this share of the hold has been spent on it (he asked for a third, was half)
 const STICKY_LOCKED = 0.5;                              // how far past its edge (in key sizes) a locked key still holds
 const CORE_LOCKED = 0.3;                                // a locked key gives way only this deep inside another key
 const LOCK_STEADY = 1.8;                                // while a key is locked, head tremor this much larger is ignored
@@ -1187,7 +1187,7 @@ const HELP_KEY = "fourlooks.help.v1";
 const HELP_HTML = `<div class="help">
   <section><h3>Type</h3><ul>
     <li>Point your nose at a key.</li>
-    <li>Hold still on it to press. After half the hold the key locks.</li>
+    <li>Hold still on it to press. After a third of the hold the key locks.</li>
     <li>The bold word on top is the best guess. Press it to take it.</li>
     <li>Nod takes the grey word. Nod twice takes the phrase.</li>
     <li>One quick shake shows the next guess.</li>
