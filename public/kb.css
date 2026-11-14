@@ -435,3 +435,27 @@ body.cue-test #cuebar::before { content: ""; position: absolute; inset: 0; width
 
 /* head-arranged letters: three letter rows of equal keys */
 .key[data-key="layout"] { font-size: clamp(11px, 1.1vw, 15px); }
+
+/* =====================================================================================
+   Mouse mode: the window is a small dock. Everything else steps away.
+   ===================================================================================== */
+#dock { display: none; }
+body.mousemode { display: block; padding: 0; background: var(--bg); }
+body.mousemode > *:not(#dock):not(#video) { display: none !important; }
+body.mousemode #dock {
+  display: flex; align-items: center; gap: 12px; height: 100vh; padding: 0 12px 0 16px; color: var(--ink);
+  font-size: 12.5px; letter-spacing: var(--label-spacing); text-transform: var(--label-case);
+}
+#dock .logo { width: 26px; height: 26px; flex: none; color: var(--accent); transition: transform 300ms var(--spring); }
+#dock.clicked .logo { animation: dock-click 320ms var(--out); }
+@keyframes dock-click { 0% { transform: scale(.7); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+#dock .hint { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dock button {
+  flex: none; width: 40px; height: 36px; padding: 7px; border: 0; border-radius: 10px; cursor: pointer;
+  background: var(--key); color: var(--ink); box-shadow: 0 0 0 1px var(--key-edge);
+  transition: background 150ms ease, transform 220ms var(--spring);
+}
+#dock button:hover { background: var(--accent-soft); }
+#dock button:active, #dock button.pressed { transform: scale(.92); }
+#dock button svg { display: block; width: 100%; height: 100%; }
+.key[data-key="mouse"] { font-size: clamp(11px, 1.1vw, 15px); }

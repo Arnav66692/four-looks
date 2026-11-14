@@ -37,7 +37,7 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "layout", "menu", "space", "undo", "fix", "speak"],
+    ["123", "layout", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
   // Every letter on its own key, arranged for a head and not for hands. The ten most used letters
   // (e t a o i n s h r d) fill the middle row with the busiest in the centre, the next eight sit below
@@ -46,7 +46,7 @@ const LAYOUTS = {
     ["⌫", ..."qjvpbkxz", "'", "send"],
     [..."rsiaetonhd"],
     ["shift", ..."gwulcmfy", ",", ".", "?"],
-    ["123", "layout", "menu", "space", "undo", "fix", "speak"],
+    ["123", "layout", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
   // Boxes: built around where the head rests, not where hands rest. Share of English letters by key:
   // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
@@ -56,16 +56,16 @@ const LAYOUTS = {
     ["⌫", "g:jkl", "g:pqrs", "g:wxyz", "send"],
     ["undo", "g:mno", "g:def", "g:ghi", "speak"],
     ["123", "g:tuv", "space", "g:abc", "menu"],
-    ["shift", ",", ".", "?", "'", "fix", "layout"],
+    ["shift", ",", ".", "?", "'", "fix", "layout", "mouse"],
   ],
   sym: [
     [..."1234567890", "⌫"],
     ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\"", "send"],
     ["#", "%", "*", "+", "=", "_", "!", ",", ".", "?"],
-    ["abc", "menu", "space", "undo", "fix", "speak"],
+    ["abc", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
 };
-const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu", "layout"]);
+const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu", "layout", "mouse"]);
 const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const ICONS = {
   "⌫": svg('<path d="M9 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-6-6z"/><path d="M12.5 10l4 4m0-4l-4 4"/>'),
@@ -73,7 +73,7 @@ const ICONS = {
   caps: svg('<path d="M12 3l8 9h-5v5H9v-5H4z"/><path d="M9 21h6"/>'),
   menu: svg('<circle cx="6" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="18" cy="12" r="1.3" fill="currentColor"/>'),
 };
-const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", undo: "undo", fix: "fix", menu: "⋯" };
+const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", undo: "undo", fix: "fix", menu: "⋯", mouse: "mouse" };
 
 const log = [];
 const record = (type, extra = {}) => log.push({ t: Date.now(), type, ...extra });
@@ -238,6 +238,7 @@ function noteFix() {
 
 function acceptGhost(how) {
   if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
+  if (how === "nod" && mode === "mouse") { clickAtRest("nod"); return true; }
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
   if (!typer.ghost()) return false;
@@ -290,9 +291,13 @@ function press(el, x, y) {
   el.classList.add("pressed");
   setTimeout(() => el.classList.remove("pressed"), 120);
   if (k === "menu") { toggleMenu(); return; }
+  if (k === "mouse") { setMode("mouse"); return; }
+  if (k === "dock:keyboard") { setMode("keyboard"); return; }
+  if (k === "dock:quit") { window.fourLooksOut?.quit?.(); return; }
   if (k.startsWith("set:")) { runSetting(k.slice(4)); return; }
   const before = typer.text().length;
   const edits = !["shift", "123", "abc", "layout", "speak", "undo", "fix"].includes(k);
+  const sentNow = k === "send";
   if (edits) typer.save();
   if (k === "undo") {
     if (pendingFix) { pendingFix = null; prompt("Dismissed."); }
@@ -327,6 +332,7 @@ function press(el, x, y) {
   renderText();
   updatePrior();
   mirror();
+  if (sentNow && autoShown) setMode("mouse", "sent");      // the keyboard came up for a text box: step back once the message is sent
 }
 
 function speak(andClear) {
@@ -488,6 +494,95 @@ function movePointer(x, y, t) {
   $("ring").style.strokeDashoffset = String(100.5 * (1 - progress));
 }
 
+// =====================================================================================
+// Mouse mode: the head moves the real cursor over the whole screen. A nod clicks (so does the
+// press move), two quick head shakes the same way switch apps, and the keyboard comes back
+// by itself when a text box takes the focus. The window shrinks to a small dock.
+// =====================================================================================
+const SHAKE_AMP = 0.2;                 // a shake swings at least this much of your calibrated left-right range
+const SHAKE_MS = 420;                  // out and back within this long
+const SHAKE_PAIR_MS = 1300;            // two shakes the same way within this long switch apps
+const CLICK_BACK_MS = 350;             // a click lands where the cursor was this long before the nod
+const TEXT_ROLES = /AXTextField|AXTextArea|AXSearchField|AXComboBox/;
+// In a browser there is no desktop bridge. With ?sim=1 a stand-in records what would have happened.
+const fakeDesk = { calls: [], mouse: async (...a) => { fakeDesk.calls.push(a); return { ok: true }; }, mode: async (m) => { fakeDesk.calls.push(["mode", m]); return { screen: { width: 1470, height: 956 } }; }, focusRole: async () => fakeDesk.role || "" };
+const desk = out?.mode ? out : (params.get("sim") ? fakeDesk : null);
+window.fourLooks.desk = fakeDesk;
+let mode = "keyboard";
+let screenSize = { width: 1470, height: 956 };
+let autoShown = false;                 // the keyboard came up by itself because a text box took focus
+const sent = [];                       // where the real cursor has been sent lately: { t, x, y }
+
+async function setMode(next, why = "you") {
+  if (!desk) { prompt("Mouse mode needs the desktop app."); return; }
+  if (next === mode) return;
+  mode = next;
+  autoShown = next === "keyboard" && why === "text box";
+  document.body.classList.toggle("mousemode", mode === "mouse");
+  toggleMenu(false);
+  const info = await desk.mode(mode, adminOn ? 0.9 : 0.56);
+  if (info?.screen) screenSize = info.screen;
+  record("mode", { mode, why });
+  if (mode === "mouse") { $("cursor").style.display = "none"; sent.length = 0; shake.rest = null; }
+  else requestAnimationFrame(() => { measure(); updatePrior(); });
+}
+window.fourLooks.setMode = setMode;
+
+// The pointer is calibrated over the window. Stretch that same head range over the whole screen.
+function driveMouse(p, t) {
+  const x = Math.round(Math.min(1, Math.max(0, p[0])) * (screenSize.width - 1)), y = Math.round(Math.min(1, Math.max(0, p[1])) * (screenSize.height - 1));
+  const last = sent[sent.length - 1];
+  if (last && last.x === x && last.y === y) { last.t2 = t; return; }
+  sent.push({ t, x, y });
+  while (sent.length > 2 && t - sent[0].t > 1500) sent.shift();
+  desk.mouse("move", x, y);
+}
+// A nod dips the cursor before it is recognised, so click where the cursor was just before.
+function clickAtRest(how) {
+  const now = performance.now();
+  const before = [...sent].reverse().find((s) => s.t <= now - CLICK_BACK_MS) || sent[0];
+  if (!before) return;
+  tick();
+  record("click", { how, x: before.x, y: before.y });
+  desk.mouse("move", before.x, before.y).then(() => desk.mouse("click", "left", 1));
+  const d = $("dock"); d.classList.remove("clicked"); void d.offsetWidth; d.classList.add("clicked");
+}
+// Two quick shakes the same way: next app (right) or previous app (left).
+const shake = { rest: null, state: "rest", since: 0, peak: 0, last: null };
+function detectShake(f) {
+  const raw = pointer.raw(f.pose, 1);
+  if (!raw) return;
+  const x = raw[0];
+  if (shake.rest == null) { shake.rest = x; return; }
+  const dx = x - shake.rest;
+  if (shake.state === "rest") {
+    if (Math.abs(dx) > 0.08) { shake.state = "out"; shake.since = f.t; shake.peak = dx; }
+    else shake.rest += 0.15 * (x - shake.rest);
+    return;
+  }
+  if (Math.abs(dx) > Math.abs(shake.peak)) shake.peak = dx;
+  if (f.t - shake.since > SHAKE_MS) { shake.state = "rest"; shake.rest = x; return; }          // a real move, not a shake
+  if (Math.abs(shake.peak) >= SHAKE_AMP && Math.abs(dx) < 0.35 * Math.abs(shake.peak)) {
+    const dir = Math.sign(shake.peak);
+    shake.state = "rest";
+    if (shake.last && shake.last.dir === dir && f.t - shake.last.t < SHAKE_PAIR_MS) {
+      shake.last = null;
+      tick();
+      record("switch-app", { dir: dir > 0 ? "next" : "previous" });
+      desk.mouse("key", 48, dir > 0 ? ["cmd"] : ["cmd", "shift"]);                               // Command+Tab
+    } else shake.last = { dir, t: f.t };
+  }
+}
+// The keyboard comes up by itself when a text box takes the focus.
+let lastRole = "";
+setInterval(async () => {
+  if (!desk || mode !== "mouse" || calibrating) return;
+  const role = await desk.focusRole();
+  const isText = TEXT_ROLES.test(role);
+  if (isText && !TEXT_ROLES.test(lastRole)) setMode("keyboard", "text box");
+  lastRole = role;
+}, 900);
+
 // ---------- nod: a quick, clear dip and return of the head accepts the grey guess ----------
 // Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
 // two never counts: a nod has to dip at least NOD_AMP of that range and be back within NOD_MS.
@@ -536,7 +631,10 @@ function onFrame(f) {
   if (!f.face || calibrating || !pointer.ready) return;
   if (!cueCfg.calibrated || c <= cueCfg.freeze) freezeSince = null; else if (freezeSince == null) freezeSince = f.t;
   const closing = freezeSince != null && f.t - freezeSince < FREEZE_MAX_MS;
-  if (!closing) {
+  if (mode === "mouse") {
+    if (!closing) { const p = pointer.point(f.pose, f.t); if (p) driveMouse(p, f.t); }
+    detectShake(f);
+  } else if (!closing) {
     const p = pointer.point(f.pose, f.t);
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
@@ -546,6 +644,7 @@ function onFrame(f) {
     if (blinkSince == null) blinkSince = f.t;
     const target = intended(blinkSince);       // where you were when the press move started
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && study.capture) { blinkFired = true; study.onPress?.(performance.now()); }
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms && mode === "mouse") { blinkFired = true; clickAtRest("press move"); }
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && target) {
       blinkFired = true;
       // For studying drift on a real face: where the head was in the camera frame at this press.
