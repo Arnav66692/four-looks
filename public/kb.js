@@ -572,7 +572,7 @@ async function calibrate() {
     await calibrateCue();
     return;
   }
-  prompt("Lost your face during calibration. Add light and try again.");
+  prompt("Lost sight of your face. It will try again when it sees you.");
   calibrating = false;
 }
 
@@ -625,7 +625,7 @@ async function startCamera() {
     usingCamera = true;
     refreshMenu();
     if (pointer.ready) prompt(LIVE ? `Ready. Click into any text box, then ${CUES[cueCfg.cue].name} to press keys.` : `Ready. ${CUES[cueCfg.cue].name} to press keys.`);
-    else { prompt("First time here. Calibration starts in a moment."); setTimeout(() => { if (!calibrating && !pointer.ready) calibrate(); }, 1500); }
+    else prompt("Sit in front of the camera. Calibration starts when it sees you.");
   } catch (err) {
     prompt(`Camera did not start (${err.message}). Open the menu and choose Camera.`);
   }
@@ -698,6 +698,14 @@ async function startStudy() {
   } finally { study.capture = false; box.style.display = "none"; studyRunning = false; }
 }
 window.fourLooks.startStudy = startStudy;
+let faceSince = 0;
+setInterval(() => {                         // no calibration yet: start one once a face has been in view for a second
+  if (!usingCamera || pointer.ready || calibrating) { faceSince = 0; return; }
+  const seen = lastFrame?.face && performance.now() - lastFrame.t < 500;
+  if (!seen) { faceSince = 0; prompt("Sit in front of the camera. Calibration starts when it sees you."); return; }
+  if (!faceSince) faceSince = performance.now();
+  else if (performance.now() - faceSince > 1000) { faceSince = 0; calibrate(); }
+}, 500);
 if (params.get("study") === "1") {           // started with "npm run study": begin once the camera and both calibrations are ready
   const wait = setInterval(() => {
     if (usingCamera && pointer.ready && cueCfg.calibrated && !calibrating) { clearInterval(wait); setTimeout(startStudy, 1500); }
