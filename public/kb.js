@@ -7,9 +7,13 @@ import { HeadPointer } from "./pointer.js";
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const DWELL = Number(params.get("dwell") || 650);      // ms on a key to press it
-const BLINK_MS = 420;                                   // held blink presses the key under the cursor
+const BLINK_MS = Number(params.get("blink") || 260);    // a deliberate blink this long presses the key under the cursor
+const EYES_CLOSING = 0.35;                              // freeze the cursor while the eyes close, so a blink presses where you were
 const SIGMA = 0.45;                                     // press spread, in key widths
-const MODEL_KEY = "fourlooks.pointer.v1";
+const STICKY = 0.25;                                    // hover stays until the pointer is this far into a new key
+const CHIP_SLOTS = 4;
+const POINTER_KEY = "fourlooks.pointer.v1";
+const WORDS_KEY = "fourlooks.words.v1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const LAYOUTS = {
@@ -26,7 +30,8 @@ const LAYOUTS = {
     ["abc", "space", "speak", "clear"],
   ],
 };
-const WIDE = new Set(["⌫", "send", "shift", "123", "abc", "speak", "clear"]);
+const FN = new Set(["⌫", "shift", "123", "abc", "speak", "clear"]);
+const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", clear: "clear" };
 
 const log = [];
 const record = (type, extra = {}) => log.push({ t: Date.now(), type, ...extra });
@@ -35,7 +40,7 @@ window.fourLooks = { log };
 let typer = null;
 let layer = "abc";
 let pointer = loadPointer();
-let letterCenters = [];     // [{ letter, x, y }] in px
+let letterCenters = [];
 let keyWidth = 60;
 let lastFrame = null;
 let usingCamera = false;
@@ -43,23 +48,45 @@ let calibrating = false;
 const watchers = new Set();
 
 function loadPointer() {
-  try { return HeadPointer.from(JSON.parse(localStorage.getItem(MODEL_KEY))); } catch { return new HeadPointer(); }
+  try { return HeadPointer.from(JSON.parse(localStorage.getItem(POINTER_KEY))); } catch { return new HeadPointer(); }
 }
-function savePointer() { try { localStorage.setItem(MODEL_KEY, JSON.stringify(pointer)); } catch { /* storage off */ } }
+function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
+function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 function prompt(text, big = false) { $("prompt").textContent = text; $("prompt").classList.toggle("big", big); }
 
-// ---------- rendering ----------
-function label(k) {
-  if (k.length === 1 && /[a-z]/.test(k)) return typer && typer.shift !== "off" ? k.toUpperCase() : k;
-  return k;
+// ---------- sound: one short soft tick per press ----------
+let audio = null;
+function tick() {
+  try {
+    audio = audio || new AudioContext();
+    const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime;
+    o.type = "sine"; o.frequency.setValueAtTime(1500, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.03);
+    g.gain.setValueAtTime(0.045, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    o.connect(g).connect(audio.destination); o.start(t); o.stop(t + 0.06);
+  } catch { /* no audio */ }
 }
-function renderKeys() {
+
+// ---------- rendering: build once per layer, then update in place ----------
+function buildKeys() {
   $("keys").innerHTML = LAYOUTS[layer].map((row) => `<div class="row">${row.map((k) => {
-    const cls = ["key", WIDE.has(k) ? "wide" : "", k === "space" ? "space" : "", k === "send" ? "send" : "",
-      k === "shift" && typer?.shift !== "off" ? "on" : ""].join(" ");
-    return `<div class="${cls}" data-key="${k === "\"" ? "&quot;" : k}">${k === "space" ? "" : label(k)}${k === "shift" && typer?.shift === "lock" ? " lock" : ""}</div>`;
+    const cls = ["key", FN.has(k) ? "fn" : "", k === "space" ? "space" : "", k === "send" ? "send" : ""].join(" ").trim();
+    return `<div class="${cls}" data-key="${k === "\"" ? "&quot;" : k}"><span class="label"></span></div>`;
   }).join("")}</div>`).join("");
+  $("chips").innerHTML = Array.from({ length: CHIP_SLOTS }, () => `<div data-key="pick" class="empty"></div>`).join("");
+  updateKeys();
   measure();
+}
+function updateKeys() {
+  const upper = typer && typer.shift !== "off";
+  document.querySelectorAll("#keys [data-key]").forEach((el) => {
+    const k = el.dataset.key;
+    const isLetter = k.length === 1 && /[a-z]/.test(k);
+    el.querySelector(".label").textContent = isLetter ? (upper ? k.toUpperCase() : k) : (FACE[k] ?? k);
+    if (k === "shift") {
+      el.classList.toggle("on", !!typer && typer.shift !== "off");
+      el.querySelector(".label").textContent = typer?.shift === "lock" ? "⇪" : "⇧";
+    }
+  });
 }
 function measure() {
   letterCenters = [...document.querySelectorAll("#keys [data-key]")]
@@ -69,14 +96,20 @@ function measure() {
 function renderText() {
   if (!typer) return;
   $("done").textContent = typer.committed;
-  $("typing").textContent = typer.typedWord() ? typer.caseLike(typer.typedWord()) : "";
+  $("typing").textContent = typer.pending.length ? typer.exactCase(typer.typedWord()) : "";
+  $("textbox").classList.toggle("empty", !typer.text());
   $("textbox").scrollTop = $("textbox").scrollHeight;
   const sugg = typer.suggestions(3);
-  $("chips").innerHTML = sugg.map((w) => `<div data-key="pick" data-word="${w.replace(/"/g, "&quot;")}">${w}</div>`).join("");
+  [...$("chips").children].forEach((el, i) => {
+    const w = sugg[i];
+    el.classList.toggle("empty", !w);
+    el.classList.toggle("lead", i === 0 && !!w);
+    el.dataset.word = w || "";
+    el.textContent = w || "";
+  });
 }
 
 // ---------- pressing ----------
-// Probabilities over a-z from where the press landed: a Gaussian around each letter key.
 function letterProbs(x, y) {
   const s = SIGMA * keyWidth;
   const w = new Array(26).fill(0);
@@ -87,25 +120,28 @@ function letterProbs(x, y) {
 
 function press(el, x, y) {
   const k = el.dataset.key;
+  if (k === "pick" && !el.dataset.word) return;
+  tick();
   el.classList.add("pressed");
-  setTimeout(() => el.classList.remove("pressed"), 180);
-  if (k === "pick") { typer.pick(el.dataset.word); record("pick", { word: el.dataset.word }); }
-  else if (k.length === 1 && LETTERS.includes(k)) {
-    const probs = layer === "abc" ? letterProbs(x, y) : null;
-    if (probs) typer.letter(probs);
-    record("letter", { key: k, sure: probs ? +Math.max(...probs).toFixed(3) : 1 });
-    const wasShift = typer.shift;
-    if (wasShift !== "lock") renderKeys();
-  }
-  else if (k === "space") { typer.literal(" "); record("space"); }
+  setTimeout(() => el.classList.remove("pressed"), 120);
+  if (k === "pick") {
+    typer.pick(el.dataset.word);
+    store(WORDS_KEY, [...typer.learned]);
+    record("pick", { word: el.dataset.word });
+  } else if (k.length === 1 && LETTERS.includes(k)) {
+    typer.letter(letterProbs(x, y));
+    record("letter", { key: k });
+  } else if (k === "space") { typer.literal(" "); record("space"); }
   else if (k === "⌫") { typer.backspace(); record("backspace"); }
-  else if (k === "shift") { typer.toggleShift(); renderKeys(); }
-  else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : "abc"; renderKeys(); }
+  else if (k === "shift") typer.toggleShift();
+  else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : "abc"; buildKeys(); }
   else if (k === "speak") speak(false);
   else if (k === "send") send();
-  else if (k === "clear") { typer.clear(); record("clear"); renderKeys(); }
-  else { typer.literal(k); record("symbol", { key: k }); if (/[.!?]/.test(k)) renderKeys(); }
+  else if (k === "clear") { typer.clear(); mirrored = ""; record("clear"); }
+  else { typer.literal(k); record("symbol", { key: k }); }
+  updateKeys();
   renderText();
+  mirror();
 }
 
 function speak(andClear) {
@@ -115,36 +151,68 @@ function speak(andClear) {
   speechSynthesis.cancel();
   speechSynthesis.speak(new SpeechSynthesisUtterance(text));
   record(andClear ? "send" : "speak", { text, chars: text.length });
-  if (andClear) { typer.clear(); renderKeys(); }
-  renderText();
+  if (andClear) typer.clear();
 }
-function send() {
-  if (window.fourLooksOut?.send) {           // set by the desktop app: types into the app in front
-    typer.commitWord();
-    const text = typer.text().trim();
-    if (!text) return;
-    window.fourLooksOut.send(text).then((r) => {
-      if (r?.ok) { record("send", { text, chars: text.length, to: "app" }); prompt(`sent: ${text}`); typer.clear(); renderKeys(); renderText(); }
-      else prompt(`could not type into the app: ${r?.error || "unknown"}. Allow Accessibility for this app in System Settings.`);
-    });
-    return;
-  }
-  speak(true);
+// ---------- live typing into the app in front (desktop app only) ----------
+const out = window.fourLooksOut;
+const LIVE = !!out?.edit;
+let mirrored = "";
+let queue = Promise.resolve();
+function mirror() {
+  if (!LIVE || !typer) return;
+  const target = typer.committed;
+  let k = 0;
+  while (k < mirrored.length && k < target.length && mirrored[k] === target[k]) k++;
+  const deletes = mirrored.length - k, add = target.slice(k);
+  if (!deletes && !add) return;
+  mirrored = target;
+  queue = queue.then(() => out.edit(deletes, add)).then((r) => {
+    if (r && !r.ok) prompt("Could not type into the app. Allow Accessibility for Terminal in System Settings.");
+  });
 }
 
-// ---------- dwell ----------
+function send() {
+  if (LIVE) {
+    typer.commitWord();
+    mirror();
+    const text = typer.text().trim();
+    queue = queue.then(() => out.enter());
+    record("send", { text, chars: text.length, to: "app" });
+    prompt(text ? `Sent: ${text}` : "Pressed return.");
+    typer.clear(); mirrored = "";
+    updateKeys(); renderText();
+    return;
+  }
+  if (!window.fourLooksOut?.send) { speak(true); return; }
+  typer.commitWord();
+  const text = typer.text().trim();
+  if (!text) return;
+  window.fourLooksOut.send(text).then((r) => {
+    if (r?.ok) { record("send", { text, chars: text.length, to: "app" }); prompt(`Sent: ${text}`); typer.clear(); updateKeys(); renderText(); }
+    else prompt("Could not type into the app. Allow Accessibility for Terminal in System Settings.");
+  });
+}
+
+// ---------- dwell, with sticky hover ----------
 let hoverEl = null, hoverSince = 0, armed = true, cursorAt = null;
 function keyAt(x, y) {
   const el = document.elementFromPoint(x, y);
   return el ? el.closest("[data-key]") : null;
 }
+function stillOn(el, x, y) {
+  if (!el || !el.isConnected) return false;
+  const r = el.getBoundingClientRect(), m = STICKY * Math.min(r.width, r.height);
+  return x > r.left - m && x < r.right + m && y > r.top - m && y < r.bottom + m;
+}
+function setFill(el, p) { if (el) el.style.setProperty("--p", String(p)); }
 function movePointer(x, y, t) {
   cursorAt = [x, y];
   const c = $("cursor");
   c.style.display = "block";
-  c.style.transform = `translate(${x}px, ${y}px)`;
-  const el = keyAt(x, y);
+  c.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  const el = stillOn(hoverEl, x, y) ? hoverEl : keyAt(x, y);
   if (el !== hoverEl) {
+    setFill(hoverEl, 0);
     hoverEl?.classList.remove("hover");
     hoverEl = el; hoverSince = t; armed = true;
     el?.classList.add("hover");
@@ -159,7 +227,8 @@ function movePointer(x, y, t) {
       progress = 0;
     }
   }
-  $("ring").style.strokeDashoffset = String(113.1 * (1 - progress));
+  setFill(hoverEl, progress);
+  $("ring").style.strokeDashoffset = String(100.5 * (1 - progress));
 }
 
 // ---------- camera ----------
@@ -167,11 +236,15 @@ let blinkSince = null, blinkFired = false;
 function onFrame(f) {
   lastFrame = f;
   watchers.forEach((w) => w(f));
-  $("status").textContent = f.face ? (pointer.ready ? "tracking" : "tracking, press calibrate") : "no face";
+  $("status").textContent = f.face ? (pointer.ready ? "tracking" : "calibrate") : "no face";
+  $("status").classList.toggle("live", f.face && pointer.ready);
   if (!f.face || calibrating || !pointer.ready) return;
-  const p = pointer.point(f.pose, f.t);
-  if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
-  const blink = (f.scores.eyeBlinkLeft || 0) > 0.55 && (f.scores.eyeBlinkRight || 0) > 0.55;
+  const closing = Math.max(f.scores.eyeBlinkLeft || 0, f.scores.eyeBlinkRight || 0) > EYES_CLOSING;
+  if (!closing) {
+    const p = pointer.point(f.pose, f.t);
+    if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
+  } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
+  const blink = (f.scores.eyeBlinkLeft || 0) > 0.5 && (f.scores.eyeBlinkRight || 0) > 0.5;
   if (blink) {
     if (blinkSince == null) blinkSince = f.t;
     if (!blinkFired && f.t - blinkSince > BLINK_MS && hoverEl && cursorAt) {
@@ -193,7 +266,7 @@ async function collectPose(ms) {
 }
 
 async function calibrate() {
-  if (!lastFrame) { prompt("start the camera first"); return; }
+  if (!lastFrame) { prompt("Start the camera first."); return; }
   calibrating = true;
   $("cursor").style.display = "none";
   const targets = [[0.5, 0.5], [0.08, 0.1], [0.92, 0.1], [0.92, 0.9], [0.08, 0.9], [0.5, 0.5]];
@@ -203,7 +276,7 @@ async function calibrate() {
     dot.style.display = "block";
     dot.style.left = `${tx * innerWidth}px`;
     dot.style.top = `${ty * innerHeight}px`;
-    prompt("point your nose at the dot", true);
+    prompt("Point your nose at the dot.", true);
     await sleep(1100);
     const pose = await collectPose(700);
     if (pose) { poses.push(pose); used.push([tx, ty]); }
@@ -211,46 +284,48 @@ async function calibrate() {
   $("target").style.display = "none";
   if (poses.length >= 4) {
     pointer.fit(poses, used);
-    savePointer();
+    store(POINTER_KEY, pointer);
     record("calibrate", { points: poses.length });
-    prompt("ready. hold on a key to press it, or hold a blink");
-  } else prompt("calibration lost your face, try again with more light");
+    prompt("Ready. Hold on a key or blink to press.");
+  } else prompt("Lost your face during calibration. Add light and try again.");
   calibrating = false;
 }
 
 $("start").addEventListener("click", async () => {
   $("start").disabled = true;
-  prompt("starting camera");
+  prompt("Starting the camera.");
   try {
     await startFace($("video"), onFrame);
     usingCamera = true;
-    prompt(pointer.ready ? "ready. hold on a key to press it, or hold a blink" : "press calibrate");
+    prompt(pointer.ready ? (LIVE ? "Ready. Click into any text box, then type. Hold on a key or blink to press." : "Ready. Hold on a key or blink to press.") : "Press calibrate.");
   } catch (err) {
-    prompt(`camera failed: ${err.message}`);
+    prompt(`Camera failed: ${err.message}`);
     $("start").disabled = false;
   }
 });
 $("calibrate").addEventListener("click", () => { if (!calibrating) calibrate(); });
+if (window.fourLooksOut?.quit) { $("quit").hidden = false; $("quit").addEventListener("click", () => window.fourLooksOut.quit()); }
 
-// Mouse drives the same pointer when the camera is off, so the keyboard works for testing and for mouse users.
+// The mouse drives the same pointer when the camera is off, for testing and for mouse users.
 addEventListener("mousemove", (e) => { if (!usingCamera || !pointer.ready) movePointer(e.clientX, e.clientY, performance.now()); });
 addEventListener("mousedown", (e) => {
   if (e.target.closest("#bar")) return;
   const el = keyAt(e.clientX, e.clientY);
-  if (el && typer) { e.preventDefault(); press(el, e.clientX, e.clientY); armed = false; }
+  if (el && typer) { e.preventDefault(); press(el, e.clientX, e.clientY); armed = false; hoverSince = performance.now(); }
 });
-setInterval(() => { if (cursorAt && (!usingCamera || !pointer.ready)) movePointer(cursorAt[0], cursorAt[1], performance.now()); }, 50);
+setInterval(() => { if (cursorAt && (!usingCamera || !pointer.ready)) movePointer(cursorAt[0], cursorAt[1], performance.now()); }, 33);
 addEventListener("resize", measure);
 
 (async () => {
-  renderKeys();
+  buildKeys();
   try {
     const model = await (await fetch("/lm.json")).json();
     typer = new KeyTyper(new Decoder(model, { groups: LETTER_GROUPS }));
+    typer.learn(loadWords());
     window.fourLooks.typer = typer;
-    renderKeys(); renderText();
-    prompt("mouse works now. start the camera for head control");
+    updateKeys(); renderText();
+    prompt(usingCamera ? "" : "The mouse works now. Start the camera for head control.");
   } catch (err) {
-    prompt(`word model failed to load: ${err.message}`);
+    prompt(`Word model failed to load: ${err.message}`);
   }
 })();

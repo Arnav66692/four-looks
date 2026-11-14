@@ -41,7 +41,10 @@ function fitAffine(poses, targets) {
 }
 
 export class HeadPointer {
-  constructor() { this.map = null; this.fx = new OneEuro(); this.fy = new OneEuro(); }
+  // Heavy smoothing when the head is nearly still, light smoothing when it moves fast.
+  constructor({ minCutoff = 0.4, beta = 3 } = {}) {
+    this.map = null; this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
+  }
   get ready() { return !!this.map; }
 
   // poses: head pose samples (means). targets: matching points in 0..1 screen units.
