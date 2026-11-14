@@ -42,8 +42,10 @@ function fitAffine(poses, targets) {
 
 export class HeadPointer {
   // Heavy smoothing when the head is nearly still, light smoothing when it moves fast.
-  constructor({ minCutoff = 0.4, beta = 3 } = {}) {
+  // deadzone: moves smaller than this (screen units) are ignored, so a still head gives a still cursor.
+  constructor({ minCutoff = 0.25, beta = 1.5, deadzone = 0.006, gain = 1 } = {}) {
     this.map = null; this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
+    this.deadzone = deadzone; this.gain = gain; this.shown = null;
   }
   get ready() { return !!this.map; }
 
@@ -54,9 +56,12 @@ export class HeadPointer {
   point(pose, t) {
     if (!this.map || !pose) return null;
     const v = [pose[0], pose[1], 1];
-    const raw = this.map.map((row) => row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+    const raw = this.map.map((row) => 0.5 + this.gain * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] - 0.5));
     const clamp = (x) => Math.min(1, Math.max(0, x));
-    return [clamp(this.fx.filter(raw[0], t)), clamp(this.fy.filter(raw[1], t))];
+    const p = [clamp(this.fx.filter(raw[0], t)), clamp(this.fy.filter(raw[1], t))];
+    if (this.shown && Math.hypot(p[0] - this.shown[0], p[1] - this.shown[1]) < this.deadzone) return this.shown;
+    this.shown = p;
+    return p;
   }
 
   toJSON() { return { map: this.map }; }

@@ -3,12 +3,14 @@ import { Decoder, LETTER_GROUPS } from "/src/decoder.js";
 import { KeyTyper, LETTERS } from "/src/keytyper.js";
 import { startFace } from "./face.js";
 import { HeadPointer } from "./pointer.js";
-import { DEFAULT_BLINK, closure, fitBlink } from "./blink.js";
+import { CUES, CUE_ORDER, DEFAULT_CUE, fitCue } from "./blink.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-const DWELL = Number(params.get("dwell") || 650);      // ms on a key to press it
-const BLINK_KEY = "fourlooks.blink.v1";                 // per-person blink line and length, from blink calibration
+const DWELL = Number(params.get("dwell") || 1000);     // ms on a key to press it
+const CUE_KEY = "fourlooks.cue.v1";                     // which face move presses, with its per-person line and length
+const REACH_KEY = "fourlooks.reach.v1";
+const REACH_STEPS = [1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
 const STICKY = 0.25;                                    // hover stays until the pointer is this far into a new key
 const CHIP_SLOTS = 4;
@@ -46,7 +48,7 @@ let keyWidth = 60;
 let lastFrame = null;
 let usingCamera = false;
 let calibrating = false;
-let blinkCfg = loadBlink();
+let cueCfg = loadCue();
 let holdToPress = loadHold();   // off by default: blink presses, holding only highlights
 const watchers = new Set();
 
@@ -54,7 +56,8 @@ function loadPointer() {
   try { return HeadPointer.from(JSON.parse(localStorage.getItem(POINTER_KEY))); } catch { return new HeadPointer(); }
 }
 function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
-function loadBlink() { try { return { ...DEFAULT_BLINK, ...JSON.parse(localStorage.getItem(BLINK_KEY)) }; } catch { return { ...DEFAULT_BLINK }; } }
+function loadCue() { try { const o = JSON.parse(localStorage.getItem(CUE_KEY)); return o && CUES[o.cue] ? { ...DEFAULT_CUE, ...o } : { ...DEFAULT_CUE }; } catch { return { ...DEFAULT_CUE }; } }
+function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH_KEY))) || 1.3; } catch { return 1.3; } }
 function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 function prompt(text, big = false) { $("prompt").textContent = text; $("prompt").classList.toggle("big", big); }
@@ -243,18 +246,18 @@ function onFrame(f) {
   watchers.forEach((w) => w(f));
   $("status").textContent = f.face ? (pointer.ready ? "tracking" : "calibrate") : "no face";
   $("status").classList.toggle("live", f.face && pointer.ready);
-  const c = f.face ? closure(f.scores) : 0;
+  const c = f.face ? CUES[cueCfg.cue].score(f.scores) : 0;
   $("meter").style.setProperty("--c", String(c));
-  $("meter").style.setProperty("--thr", String(blinkCfg.thr));
+  $("meter").style.setProperty("--thr", String(cueCfg.thr));
   if (!f.face || calibrating || !pointer.ready) return;
-  const closing = c > blinkCfg.freeze;
+  const closing = c > cueCfg.freeze;
   if (!closing) {
     const p = pointer.point(f.pose, f.t);
     if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
-  if (c > blinkCfg.thr) {
+  if (c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
-    if (!blinkFired && f.t - blinkSince > blinkCfg.ms && hoverEl && cursorAt) {
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms && hoverEl && cursorAt) {
       blinkFired = true;
       press(hoverEl, cursorAt[0], cursorAt[1]);
       hoverSince = f.t; armed = false;
@@ -283,7 +286,7 @@ async function calibrate() {
     dot.style.display = "block";
     dot.style.left = `${tx * innerWidth}px`;
     dot.style.top = `${ty * innerHeight}px`;
-    prompt("Point your nose at the dot.", true);
+    prompt("Turn your head a little toward the dot. Keep it comfortable.", true);
     await sleep(1100);
     const pose = await collectPose(700);
     if (pose) { poses.push(pose); used.push([tx, ty]); }
@@ -294,47 +297,47 @@ async function calibrate() {
     store(POINTER_KEY, pointer);
     record("calibrate", { points: poses.length });
     calibrating = false;
-    await calibrateBlink();
+    await calibrateCue();
     return;
   } else prompt("Lost your face during calibration. Add light and try again.");
   calibrating = false;
 }
 
-async function collectClosure(ms) {
+async function collectCue(ms) {
+  const score = CUES[cueCfg.cue].score;
   const xs = [];
-  const w = (f) => { if (f.face) xs.push({ t: f.t, c: closure(f.scores) }); };
+  const w = (f) => { if (f.face) xs.push({ t: f.t, c: score(f.scores) }); };
   watchers.add(w);
   await sleep(ms);
   watchers.delete(w);
   return xs;
 }
 
-async function calibrateBlink() {
+async function calibrateCue() {
   if (!lastFrame) { prompt("Start the camera first."); return; }
+  const cue = CUES[cueCfg.cue];
   calibrating = true;
   $("cursor").style.display = "none";
-  prompt("Eyes open. Look at the screen.", true);
+  prompt("Relax your face and look at the screen.", true);
   await sleep(900);
-  const open = (await collectClosure(2000)).map((x) => x.c);
+  const rest = (await collectCue(2000)).map((x) => x.c);
   const firm = [];
   for (let i = 1; i <= 3; i++) {
-    prompt(`Ready for blink ${i} of 3.`, true);
+    prompt(`Get ready, ${i} of 3.`, true);
     await sleep(1100);
-    prompt("Blink firmly now.", true);
-    firm.push(await collectClosure(1600));
+    prompt(cue.firm, true);
+    firm.push(await collectCue(1600));
   }
-  prompt("Now blink normally a few times.", true);
+  prompt(cue.normal, true);
   await sleep(600);
-  const normal = await collectClosure(4500);
-  const fit = fitBlink(open, firm, normal);
-  record("blink-calibrate", fit);
+  const normal = await collectCue(4500);
+  const fit = fitCue(cueCfg.cue, rest, firm, normal);
+  record("cue-calibrate", fit);
   if (fit.ok) {
-    blinkCfg = fit;
-    store(BLINK_KEY, blinkCfg);
-    prompt(fit.clean
-      ? `Blink set. Hold a blink about ${Math.round(fit.ms / 10) * 10} ms to press.`
-      : "Blink set, but your normal blinks are close to your firm ones. Make press blinks a little longer.");
-  } else prompt(`Could not see your blinks clearly (${fit.why}). Face the camera with more light and try again.`);
+    cueCfg = fit;
+    store(CUE_KEY, cueCfg);
+    prompt(fit.clean ? `Set. A short ${cue.name} presses a key.` : `Set, but everyday movement comes close. Make a ${cue.name} a bit stronger to press.`);
+  } else prompt(`Could not see a clear ${cue.name} (${fit.why}). Try another press move, or add light.`);
   calibrating = false;
 }
 
@@ -344,14 +347,31 @@ $("start").addEventListener("click", async () => {
   try {
     await startFace($("video"), onFrame);
     usingCamera = true;
-    prompt(pointer.ready ? (LIVE ? "Ready. Click into any text box, then blink to press keys." : "Ready. Blink to press keys.") : "Press calibrate.");
+    prompt(pointer.ready ? (LIVE ? `Ready. Click into any text box, then ${CUES[cueCfg.cue].name} to press keys.` : `Ready. ${CUES[cueCfg.cue].name} to press keys.`) : "Press calibrate.");
   } catch (err) {
     prompt(`Camera failed: ${err.message}`);
     $("start").disabled = false;
   }
 });
 $("calibrate").addEventListener("click", () => { if (!calibrating) calibrate(); });
-$("blinkcal").addEventListener("click", () => { if (!calibrating) calibrateBlink(); });
+function showCue() { $("cuebtn").textContent = `press with: ${CUES[cueCfg.cue].name}`; }
+$("cuebtn").addEventListener("click", () => {
+  if (calibrating) return;
+  const next = CUE_ORDER[(CUE_ORDER.indexOf(cueCfg.cue) + 1) % CUE_ORDER.length];
+  cueCfg = { ...DEFAULT_CUE, cue: next };
+  store(CUE_KEY, cueCfg);
+  showCue();
+  if (lastFrame) calibrateCue(); else prompt(`Press move is now ${CUES[next].name}. Start the camera to calibrate it.`);
+});
+showCue();
+function showReach() { $("reach").textContent = `reach ${pointer.gain}x`; }
+$("reach").addEventListener("click", () => {
+  pointer.gain = REACH_STEPS[(REACH_STEPS.indexOf(pointer.gain) + 1) % REACH_STEPS.length] || 1;
+  store(REACH_KEY, pointer.gain);
+  showReach();
+});
+pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1.3;
+showReach();
 function showHold() { $("hold").textContent = holdToPress ? "hold to press: on" : "hold to press: off"; $("hold").classList.toggle("on", holdToPress); }
 $("hold").addEventListener("click", () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); showHold(); });
 showHold();
