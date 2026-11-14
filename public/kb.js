@@ -123,9 +123,10 @@ function send() {
     typer.commitWord();
     const text = typer.text().trim();
     if (!text) return;
-    window.fourLooksOut.send(text);
-    record("send", { text, chars: text.length, to: "app" });
-    typer.clear(); renderKeys(); renderText();
+    window.fourLooksOut.send(text).then((r) => {
+      if (r?.ok) { record("send", { text, chars: text.length, to: "app" }); prompt(`sent: ${text}`); typer.clear(); renderKeys(); renderText(); }
+      else prompt(`could not type into the app: ${r?.error || "unknown"}. Allow Accessibility for this app in System Settings.`);
+    });
     return;
   }
   speak(true);

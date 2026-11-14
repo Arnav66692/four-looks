@@ -1,1 +1,17 @@
-{"type":"module"}
+{
+  "type": "module",
+  "devDependencies": {
+    "electron": "^45.2.3"
+  },
+  "allowScripts": {
+    "electron@45.2.3": true
+  },
+  "name": "four-looks",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron .",
+    "eval": "node tools/eval.mjs dev"
+  }
+}
