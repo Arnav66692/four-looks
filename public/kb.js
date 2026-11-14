@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const DWELL = Number(params.get("dwell") || 1000);     // ms on a key to press it
 const CUE_KEY = "fourlooks.cue.v1";                     // which face move presses, with its per-person line and length
-const REACH_KEY = "fourlooks.reach.v2";
+const REACH_KEY = "fourlooks.reach.v3";
 const TUNE_KEY = "fourlooks.tune.v1";                   // sensitivity and smoothing found by the tuning run
 const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
@@ -27,7 +27,7 @@ const NOD_MS = 550;                                     // and the head is back 
 const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
 const CHIP_SLOTS = 5;
 const CHIP_ORDER = [3, 1, 0, 2, 4];     // slot -> guess rank: the best guess sits in the middle of the row
-const POINTER_KEY = "fourlooks.pointer.v3";      // v3: calibrated to the person's own comfortable range
+const POINTER_KEY = "fourlooks.pointer.v4";      // v4: follow-the-dots fit, with a line-up check
 const HOLD_KEY = "fourlooks.hold.v1";
 const WORDS_KEY = "fourlooks.words.v1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -108,7 +108,7 @@ function loadPointer() {
 }
 function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
 function loadCue() { try { const o = JSON.parse(localStorage.getItem(CUE_KEY)); return o && CUES[o.cue] ? { ...DEFAULT_CUE, ...o } : { ...DEFAULT_CUE }; } catch { return { ...DEFAULT_CUE }; } }
-function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH_KEY))) || 1; } catch { return 1; } }
+function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH_KEY))) || 1.3; } catch { return 1.3; } }
 function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 let promptTimer = 0;
@@ -571,38 +571,37 @@ async function calibrate() {
   if (!lastFrame) { prompt("Start the camera first."); return; }
   calibrating = true;
   $("cursor").style.display = "none";
-  // Your own range: face the middle, then turn as far as is comfortable each way.
-  const keys = $("keys").getBoundingClientRect(), chips = $("chips").getBoundingClientRect();
-  const area = { cx: (keys.left + keys.width / 2) / innerWidth, cy: (keys.top + keys.height / 2) / innerHeight,
-    left: 0.03, right: 0.97, top: (chips.top + 4) / innerHeight, bottom: (keys.bottom - 6) / innerHeight };
+  // Follow the dots: the cursor is fitted to where you actually point, so no direction can flip.
+  const targets = [[0.5, 0.55], [0.08, 0.12], [0.92, 0.12], [0.92, 0.9], [0.08, 0.9], [0.5, 0.55]];
   const dot = $("target");
-  const showDot = (x, y) => { dot.style.display = "block"; dot.style.left = `${x * innerWidth}px`; dot.style.top = `${y * innerHeight}px`; };
-  showDot(area.cx, area.cy);
-  prompt("Sit comfortably. Face the dot and hold still.", true);
-  await sleep(1600);
-  const centre = await collectPose(900);
-  const ext = {};
-  const where = { left: [area.left, area.cy], right: [area.right, area.cy], up: [area.cx, area.top], down: [area.cx, area.bottom] };
-  for (const dir of ["left", "right", "up", "down"]) {
-    showDot(...where[dir]);
-    prompt(`Turn ${dir} as far as is comfortable, and hold.`, true);
-    await sleep(1700);
-    ext[dir] = await collectPose(800);
-    showDot(area.cx, area.cy);
-    prompt("Back to the middle.", true);
-    await sleep(1100);
-  }
-  dot.style.display = "none";
-  if (centre && ext.left && ext.right && ext.up && ext.down) {
-    pointer.fitRange(centre, ext, area);
-    store(POINTER_KEY, pointer);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const poses = [], used = [];
+    for (const [tx, ty] of targets) {
+      dot.style.display = "block";
+      dot.style.left = `${tx * innerWidth}px`;
+      dot.style.top = `${ty * innerHeight}px`;
+      prompt(attempt === 1 ? "Point your nose at the dot. Keep it comfortable." : "That did not line up. Follow each dot with your nose.", true);
+      await sleep(1200);
+      const pose = await collectPose(700);
+      if (pose) { poses.push(pose); used.push([tx, ty]); }
+    }
+    dot.style.display = "none";
+    if (poses.length < 5) continue;
+    pointer.fit(poses, used);
+    // Line-up check: put each pose back through the fit. A person who followed the dots lands near them.
+    const miss = Math.sqrt(poses.reduce((s, p, i) => { const at = pointer.project(p, 1); return s + (at[0] - used[i][0]) ** 2 + (at[1] - used[i][1]) ** 2; }, 0) / poses.length);
     const deg = (r) => +((r * 180) / Math.PI).toFixed(1);
-    record("calibrate", { turnDeg: deg(Math.abs(ext.left[0] - ext.right[0])), nodDeg: deg(Math.abs(ext.up[1] - ext.down[1])), centre: centre.map((v) => +v.toFixed(4)) });
-    calibrating = false;
-    await calibrateCue();
-    return;
+    const yaws = poses.map((p) => p[0]), pitches = poses.map((p) => p[1]);
+    record("calibrate", { attempt, points: poses.length, missScreen: +miss.toFixed(3), turnDeg: deg(Math.max(...yaws) - Math.min(...yaws)), nodDeg: deg(Math.max(...pitches) - Math.min(...pitches)) });
+    if (miss < 0.12) {
+      store(POINTER_KEY, pointer);
+      calibrating = false;
+      await calibrateCue();
+      return;
+    }
+    pointer.map = null;
   }
-  prompt("Lost sight of your face. It will try again when it sees you.");
+  prompt("Calibration did not line up. Open the menu and choose Calibrate to try again.");
   calibrating = false;
 }
 
@@ -684,7 +683,7 @@ function applyTheme() {
   requestAnimationFrame(measure);
 }
 applyTheme();
-pointer.gain = loadReach() >= 0.4 && loadReach() <= 2.5 ? loadReach() : 1;
+pointer.gain = loadReach() >= 0.4 && loadReach() <= 2.5 ? loadReach() : 1.3;
 let tuned = { name: "medium", smoothing: { minCutoff: 0.35, beta: 2.2, deadzone: 0.005 } };
 try { const t = JSON.parse(localStorage.getItem(TUNE_KEY)); if (t?.smoothing) { tuned = t; pointer.smoothing(t.smoothing); } } catch { /* keep defaults */ }
 // ---------- camera view and admin view ----------
