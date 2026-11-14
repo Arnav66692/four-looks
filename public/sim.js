@@ -106,6 +106,8 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     for (let i = 4; i >= 0; i--) { dip = (depth * i) / 5; await sleep(HZ); }
     await sleep(300);
   }
+  // One quick shake: out to the side and straight back.
+  async function shake(dir = 1, size = 0.3) { const x0 = head.x; await lookAt(x0 + dir * size, head.y, 130); await lookAt(x0, head.y, 130); await sleep(180); }
   async function rowHop() { const y0 = head.y; await lookAt(head.x, y0 + 0.17, 160); await lookAt(head.x, y0, 160); await sleep(300); }
   // A person only does the press move once the key they want is highlighted.
   const tally = { presses: 0, reAims: 0, gaveUp: 0, wrongKey: 0 };
@@ -137,5 +139,5 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   async function type(text) {
     for (const ch of text) await press(ch === " " ? "space" : ch);
   }
-  return { head, level, tally, lookAt, lookAtKey, cue, nod, rowHop, press, type, sleep, setAuto: (v) => { auto = v; } };
+  return { head, level, tally, lookAt, lookAtKey, cue, nod, shake, rowHop, press, type, sleep, setAuto: (v) => { auto = v; } };
 }
