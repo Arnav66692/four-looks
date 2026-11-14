@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Four Looks logo options</title>
+  <style>
+    @font-face { font-family: "Barlow"; font-weight: 500; src: url("fonts/barlow-500.woff2") format("woff2"); }
+    @font-face { font-family: "Barlow"; font-weight: 600; src: url("fonts/barlow-600.woff2") format("woff2"); }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Barlow", sans-serif; background: #000; color: #f0f0fa; }
+    main { display: grid; grid-template-columns: repeat(3, 1fr); }
+    section { padding: 44px 36px 36px; display: grid; gap: 30px; justify-items: start; }
+    section.light { background: #f4f2ee; color: #141418; }
+    .mark { width: 132px; height: 132px; }
+    .lockup { display: flex; align-items: center; gap: 16px; }
+    .lockup svg { width: 44px; height: 44px; }
+    .word { font-size: 30px; font-weight: 600; letter-spacing: .02em; }
+    .small { display: flex; gap: 14px; align-items: center; }
+    .small svg:nth-child(1) { width: 32px; height: 32px; } .small svg:nth-child(2) { width: 20px; height: 20px; } .small svg:nth-child(3) { width: 14px; height: 14px; }
+    h2 { margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; opacity: .6; }
+    p { margin: 0; font-size: 14px; line-height: 1.5; opacity: .75; max-width: 30ch; }
+  </style>
+</head>
+<body>
+  <!-- Each mark is one symbol, reused at every size. currentColor makes it work on dark and light. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <!-- A: the four looks as four dots around the cursor ring -->
+    <symbol id="a" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="11" fill="none" stroke="currentColor" stroke-width="4.5"/>
+      <circle cx="32" cy="32" r="3.2" fill="currentColor"/>
+      <circle cx="32" cy="7" r="4" fill="currentColor"/><circle cx="57" cy="32" r="4" fill="currentColor"/>
+      <circle cx="32" cy="57" r="4" fill="currentColor"/><circle cx="7" cy="32" r="4" fill="currentColor"/>
+    </symbol>
+    <!-- B: a keycap with the cursor on it -->
+    <symbol id="b" viewBox="0 0 64 64">
+      <rect x="6" y="6" width="52" height="52" rx="14" fill="none" stroke="currentColor" stroke-width="4.5"/>
+      <path d="M17 49h30" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+      <circle cx="32" cy="28" r="8" fill="none" stroke="currentColor" stroke-width="4.5"/>
+      <circle cx="32" cy="28" r="2.6" fill="currentColor"/>
+    </symbol>
+    <!-- C: a face in four corner brackets, with a smile -->
+    <symbol id="c" viewBox="0 0 64 64">
+      <path d="M7 21V13a6 6 0 0 1 6-6h8M43 7h8a6 6 0 0 1 6 6v8M57 43v8a6 6 0 0 1-6 6h-8M21 57h-8a6 6 0 0 1-6-6v-8" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M22 35c2.6 4.6 6 6.8 10 6.8s7.4-2.2 10-6.8" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+      <circle cx="24" cy="25" r="3" fill="currentColor"/><circle cx="40" cy="25" r="3" fill="currentColor"/>
+    </symbol>
+  </svg>
+
+  <main>
+    <section>
+      <h2>A. Four dots, one ring</h2>
+      <svg class="mark"><use href="#a"/></svg>
+      <div class="lockup"><svg><use href="#a"/></svg><span class="word">Four Looks</span></div>
+      <div class="small"><svg><use href="#a"/></svg><svg><use href="#a"/></svg><svg><use href="#a"/></svg></div>
+      <p>The four directions around the cursor you see in the app.</p>
+    </section>
+    <section>
+      <h2>B. Keycap</h2>
+      <svg class="mark"><use href="#b"/></svg>
+      <div class="lockup"><svg><use href="#b"/></svg><span class="word">Four Looks</span></div>
+      <div class="small"><svg><use href="#b"/></svg><svg><use href="#b"/></svg><svg><use href="#b"/></svg></div>
+      <p>One key with the head cursor resting on it.</p>
+    </section>
+    <section>
+      <h2>C. Framed smile</h2>
+      <svg class="mark"><use href="#c"/></svg>
+      <div class="lockup"><svg><use href="#c"/></svg><span class="word">Four Looks</span></div>
+      <div class="small"><svg><use href="#c"/></svg><svg><use href="#c"/></svg><svg><use href="#c"/></svg></div>
+      <p>A camera frame around a face. The smile is the press.</p>
+    </section>
+    <section class="light"><svg class="mark"><use href="#a"/></svg><div class="lockup"><svg><use href="#a"/></svg><span class="word">Four Looks</span></div></section>
+    <section class="light"><svg class="mark"><use href="#b"/></svg><div class="lockup"><svg><use href="#b"/></svg><span class="word">Four Looks</span></div></section>
+    <section class="light"><svg class="mark"><use href="#c"/></svg><div class="lockup"><svg><use href="#c"/></svg><span class="word">Four Looks</span></div></section>
+  </main>
+</body>
+</html>

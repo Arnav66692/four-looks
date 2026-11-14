@@ -602,8 +602,13 @@ async function startCamera() {
 // ---------- settings: a side panel opened by the dots key, usable with the head pointer ----------
 const THEMES = ["launch", "obsidian", "carrara", "linen", "contrast", "auto"];
 let theme = (() => { try { const t = JSON.parse(localStorage.getItem("fourlooks.theme.v1")); return THEMES.includes(t) ? t : "launch"; } catch { return "launch"; } })();
+let themeTimer = 0;
 function applyTheme() {
-  if (theme === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
+  const html = document.documentElement;
+  html.classList.add("theming");                  // every surface cross-fades to the new theme
+  clearTimeout(themeTimer);
+  themeTimer = setTimeout(() => html.classList.remove("theming"), 520);
+  if (theme === "auto") delete html.dataset.theme; else html.dataset.theme = theme;
   requestAnimationFrame(measure);
 }
 applyTheme();
@@ -676,7 +681,12 @@ function buildMenu() {
 function refreshMenu() {
   for (const it of SETTINGS) {
     const el = document.querySelector(`[data-key="set:${it.id}"] .val`);
-    if (el) el.textContent = it.value();
+    if (!el) continue;
+    const next = it.value();
+    if (el.textContent === next) continue;
+    const first = el.dataset.ready !== "1";
+    el.textContent = next; el.dataset.ready = "1";
+    if (!first) { el.classList.remove("swap"); void el.offsetWidth; el.classList.add("swap"); }
   }
 }
 function toggleMenu(open = !document.body.classList.contains("menu-open")) {
@@ -702,6 +712,14 @@ setInterval(() => { if (cursorAt && (!usingCamera || !pointer.ready)) movePointe
 addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); acceptGhost("tab"); } });
 $("stats").addEventListener("click", saveLog);
 addEventListener("resize", measure);
+setInterval(() => {                        // health report for checking the app from outside
+  const body = JSON.stringify({
+    camera: usingCamera, face: !!lastFrame?.face, frameAgeMs: lastFrame ? Math.round(performance.now() - lastFrame.t) : null,
+    calibrated: pointer.ready, pressMove: cueCfg.cue, pressCalibrated: !!cueCfg.calibrated, theme, admin: adminOn, desktop: !!window.fourLooksOut,
+    prompt: $("prompt").textContent.slice(0, 120),
+  });
+  fetch("/api/status", { method: "POST", headers: { "content-type": "application/json" }, body }).catch(() => {});
+}, 2000);
 
 (async () => {
   buildKeys();

@@ -50,6 +50,7 @@ function addUsage(model, usage) {
   return next;
 }
 
+let lastStatus = null;
 let grokModel = process.env.XAI_MODEL || null;
 async function pickModel(key) {
   if (grokModel) return grokModel;
@@ -102,6 +103,15 @@ createServer(async (req, res) => {
       result = typeof text === "string" && text.trim() && text.length <= MAX_TEXT ? await grokFix(text.trim()) : { ok: false, error: "bad text" };
     } catch (err) { result = { ok: false, error: err instanceof Error ? err.message : "failed" }; }
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
+    return;
+  }
+  if (url === "/api/status") {            // the page reports its own health here, so it can be checked from outside
+    if (req.method === "POST") {
+      try { lastStatus = { ...JSON.parse(await readBody(req)), at: Date.now() }; } catch { /* ignore a bad report */ }
+      res.writeHead(204).end();
+    } else {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(lastStatus ? { ...lastStatus, ageMs: Date.now() - lastStatus.at } : { none: true }));
+    }
     return;
   }
   if (url === "/api/usage") {
