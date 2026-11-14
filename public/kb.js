@@ -44,6 +44,13 @@ const LAYOUTS = {
   ],
 };
 const FN = new Set(["⌫", "shift", "123", "abc", "speak", "undo", "fix", "menu"]);
+const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICONS = {
+  "⌫": svg('<path d="M9 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-6-6z"/><path d="M12.5 10l4 4m0-4l-4 4"/>'),
+  shift: svg('<path d="M12 4l8 9h-5v7H9v-7H4z"/>'),
+  caps: svg('<path d="M12 3l8 9h-5v5H9v-5H4z"/><path d="M9 21h6"/>'),
+  menu: svg('<circle cx="6" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="18" cy="12" r="1.3" fill="currentColor"/>'),
+};
 const FACE = { "⌫": "⌫", shift: "⇧", send: "send", space: "space", "123": "123", abc: "ABC", speak: "speak", undo: "undo", fix: "fix", menu: "⋯" };
 
 const log = [];
@@ -70,17 +77,31 @@ function loadCue() { try { const o = JSON.parse(localStorage.getItem(CUE_KEY)); 
 function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH_KEY))) || 1.3; } catch { return 1.3; } }
 function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
-function prompt(text, big = false) { $("prompt").textContent = text; $("prompt").classList.toggle("big", big); }
+let promptTimer = 0;
+function prompt(text, big = false) {      // a quiet line that fades once read
+  const el = $("prompt");
+  el.textContent = text; el.classList.toggle("big", big); el.classList.add("show");
+  clearTimeout(promptTimer);
+  if (!big) promptTimer = setTimeout(() => el.classList.remove("show"), 5000);
+}
 
 // ---------- sound: one short soft tick per press ----------
 let audio = null;
 function tick() {
   try {
     audio = audio || new AudioContext();
-    const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime;
-    o.type = "sine"; o.frequency.setValueAtTime(1500, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.03);
-    g.gain.setValueAtTime(0.045, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-    o.connect(g).connect(audio.destination); o.start(t); o.stop(t + 0.06);
+    const t = audio.currentTime;
+    // The body of the key bottoming out: a short low thump.
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(170, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.06);
+    g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(g).connect(audio.destination); o.start(t); o.stop(t + 0.1);
+    // The click of the cap: a few milliseconds of filtered noise.
+    const n = audio.createBufferSource(), buf = audio.createBuffer(1, 600, audio.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    const f = audio.createBiquadFilter(), ng = audio.createGain();
+    f.type = "bandpass"; f.frequency.value = 2400; f.Q.value = 0.9; ng.gain.value = 0.11;
+    n.buffer = buf; n.connect(f).connect(ng).connect(audio.destination); n.start(t);
   } catch { /* no audio */ }
 }
 
@@ -88,7 +109,7 @@ function tick() {
 function buildKeys() {
   $("keys").innerHTML = LAYOUTS[layer].map((row) => `<div class="row">${row.map((k) => {
     const cls = ["key", FN.has(k) ? "fn" : "", k === "space" ? "space" : "", k === "send" ? "send" : ""].join(" ").trim();
-    return `<div class="${cls}" data-key="${k === "\"" ? "&quot;" : k}"><span class="label"></span></div>`;
+    return `<div class="${cls}" data-key="${k === "\"" ? "&quot;" : k}"><span class="cap"><span class="label"></span></span></div>`;
   }).join("")}</div>`).join("");
   $("chips").innerHTML = Array.from({ length: CHIP_SLOTS }, () => `<div data-key="pick" class="empty"></div>`).join("");
   updateKeys();
@@ -99,11 +120,12 @@ function updateKeys() {
   document.querySelectorAll("#keys [data-key]").forEach((el) => {
     const k = el.dataset.key;
     const isLetter = k.length === 1 && /[a-z]/.test(k);
-    el.querySelector(".label").textContent = isLetter ? (upper ? k.toUpperCase() : k) : (FACE[k] ?? k);
+    const label = el.querySelector(".label");
     if (k === "shift") {
-      el.classList.toggle("on", !!typer && typer.shift !== "off");
-      el.querySelector(".label").textContent = typer?.shift === "lock" ? "⇪" : "⇧";
-    }
+      el.classList.toggle("on", upper);
+      label.innerHTML = typer?.shift === "lock" ? ICONS.caps : ICONS.shift;
+    } else if (ICONS[k]) { if (!label.firstChild) label.innerHTML = ICONS[k]; }
+    else label.textContent = isLetter ? k.toUpperCase() : (FACE[k] ?? k);
   });
 }
 function measure() {

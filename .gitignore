@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 public/lm.json
 .env
+native/bin/
+native/.build/

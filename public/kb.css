@@ -214,3 +214,95 @@ body.menu-open #menu .tile { opacity: 1; transform: none; transition-delay: calc
 #menu .val { position: relative; z-index: 1; font-size: clamp(15px, 1.5vw, 20px); font-weight: 500; }
 #menu .val:empty { display: none; }
 #bar { min-height: 30px; padding-bottom: 6px; }
+
+/* =====================================================================================
+   Keycaps: each key is a skirt (the body, seen from slightly above) with a raised top face.
+   Light comes from above: a hairline highlight on the top edge, shade on the front wall.
+   ===================================================================================== */
+@font-face { font-family: "Barlow"; font-weight: 400; font-display: swap; src: url("fonts/barlow-400.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 500; font-display: swap; src: url("fonts/barlow-500.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 600; font-display: swap; src: url("fonts/barlow-600.woff2") format("woff2"); }
+
+:root {
+  --skirt: color-mix(in srgb, var(--key) 78%, #000);
+  --skirt-low: color-mix(in srgb, var(--key) 58%, #000);
+  --cap-hi: rgba(255, 255, 255, .09);
+  --travel: 3px;
+  --lift: 0 6px 10px -4px rgba(0, 0, 0, .55);
+}
+:root[data-theme="launch"] { --key: #18181c; --fn: #101013; --skirt: #0c0c0f; --skirt-low: #050506; --key-edge: rgba(240, 240, 250, .09); --cap-hi: rgba(240, 240, 250, .10); }
+:root[data-theme="carrara"], :root[data-theme="linen"] { --cap-hi: rgba(255, 255, 255, .85); --lift: 0 6px 10px -5px rgba(40, 30, 20, .35); }
+:root[data-theme="contrast"] { --skirt: #000; --skirt-low: #000; --cap-hi: transparent; --lift: none; }
+
+#keys { gap: 5px; }
+.row { gap: 5px; }
+.key {
+  padding: 2px 3px calc(3px + var(--travel)); overflow: visible;
+  border: 0; border-radius: calc(var(--radius) + 2px);
+  background: linear-gradient(to bottom, var(--skirt), var(--skirt-low));
+  box-shadow: var(--lift), 0 0 0 1px var(--key-edge);
+  font-size: clamp(18px, 2.2vw, 32px); font-weight: 500;
+  transition: box-shadow 140ms ease;
+}
+.key .cap {
+  position: relative; overflow: hidden; flex: 1; align-self: stretch;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius); background: var(--key);
+  box-shadow: inset 0 1px 0 var(--cap-hi), inset 0 -1px 0 rgba(0, 0, 0, .28);
+  transition: transform 200ms cubic-bezier(.2, .9, .3, 1.25), background 140ms ease;
+}
+.key.fn { background: linear-gradient(to bottom, var(--skirt), var(--skirt-low)); font-size: clamp(12px, 1.25vw, 17px); color: var(--muted); }
+.key.fn .cap { background: var(--fn); }
+.key.send { background: linear-gradient(to bottom, color-mix(in srgb, var(--accent) 72%, #000), color-mix(in srgb, var(--accent) 50%, #000)); }
+.key.send .cap { background: var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .18); }
+.key.on .cap { background: var(--key); color: var(--accent); }
+.key .label { display: flex; align-items: center; justify-content: center; }
+.key svg { width: 1.45em; height: 1.45em; }
+.key.fn svg { width: 1.9em; height: 1.9em; }
+
+/* the hold fill now lives on the top face */
+.key::before { content: none; }
+.key .cap::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; background: var(--accent-fill);
+  transform-origin: bottom; transform: scaleY(var(--p, 0)); transition: transform 60ms linear;
+}
+.key.send .cap::before { background: rgba(0, 0, 0, .14); }
+
+/* selected: the top face takes a hairline in the accent, no glow */
+.key.hover { box-shadow: var(--lift), 0 0 0 1px var(--key-edge) !important; }
+.key.hover .cap { box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 1px 0 var(--cap-hi); }
+.key.hover { color: var(--ink); }
+
+/* pressed: the top face travels down into the body and the shadow tightens */
+.key.pressed { transform: none; box-shadow: 0 2px 4px -2px rgba(0, 0, 0, .5), 0 0 0 1px var(--key-edge) !important; }
+.key.pressed .cap { transform: translateY(var(--travel)); transition-duration: 50ms; background: color-mix(in srgb, var(--key) 86%, var(--accent)); }
+.key.send.pressed .cap { background: color-mix(in srgb, var(--accent) 88%, #000); }
+
+/* ---------- less on screen ---------- */
+#video { position: fixed; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+#cam { display: none; }
+#top { position: relative; }
+#textbox { border: 0; background: color-mix(in srgb, var(--panel) 70%, transparent); padding: 18px 24px; scrollbar-width: none; caret-color: var(--accent); }
+#textbox::-webkit-scrollbar { display: none; }
+#textbox.empty::before { content: "Type with your head."; }
+::selection { background: var(--accent-fill); color: var(--ink); }
+#presence { position: absolute; right: 16px; top: 14px; display: flex; align-items: center; gap: 10px; }
+#status { position: static; font-size: 11px; color: var(--muted); letter-spacing: var(--label-spacing); text-transform: var(--label-case); }
+#status::before { width: 6px; height: 6px; background: var(--muted); }
+#status.live::before { background: var(--accent); }
+#meter { position: relative; left: auto; right: auto; top: auto; width: 64px; height: 3px; border-radius: 2px; background: var(--accent-soft); }
+#meter::before { background: var(--accent); border-radius: 2px; }
+#meter::after { background: var(--ink); top: -3px; bottom: -3px; width: 1.5px; }
+
+#chips [data-key]:not(:last-child)::after { display: none; }
+#chips [data-key] { color: var(--muted); border-radius: 10px; }
+#chips [data-key].lead { color: var(--ink); font-weight: 500; }
+#chips .hover { background: var(--accent-soft); box-shadow: none !important; color: var(--ink); }
+
+#bar { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 16px; min-height: 26px; padding: 0 4px 8px; }
+#prompt { flex: 1 1 auto; opacity: 0; transition: opacity 500ms ease; }
+#prompt.show, #prompt.big { opacity: 1; }
+#stats { position: static; float: none; flex: none; margin: 0; padding: 0; background: none; font-size: 12px; color: var(--muted); }
+#bar #stats { border: 0; box-shadow: none; background: none; border-radius: 0; padding: 0; font-weight: 400; font-variant-numeric: tabular-nums; }
+:root { --travel: 4px; }
+:root[data-theme="launch"] { --key: #1b1b20; --skirt: #0e0e11; }
