@@ -43,7 +43,7 @@ function fitAffine(poses, targets) {
 export class HeadPointer {
   // Heavy smoothing when the head is nearly still, light smoothing when it moves fast.
   // deadzone: moves smaller than this (screen units) are ignored, so a still head gives a still cursor.
-  constructor({ minCutoff = 0.25, beta = 1.5, deadzone = 0.006, gain = 1 } = {}) {
+  constructor({ minCutoff = 0.35, beta = 2.2, deadzone = 0.005, gain = 1 } = {}) {
     this.map = null; this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
     this.deadzone = deadzone; this.gain = gain; this.shown = null;
   }

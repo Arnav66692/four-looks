@@ -12,7 +12,13 @@ const CUE_KEY = "fourlooks.cue.v1";                     // which face move press
 const REACH_KEY = "fourlooks.reach.v1";
 const REACH_STEPS = [1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
-const STICKY = 0.25;                                    // hover stays until the pointer is this far into a new key
+const STICKY = 0.2;                                     // margin (in key sizes) a fresh hover keeps
+const STICKY_LOCKED = 0.6;                              // margin once you have stayed on a key a moment
+const LOCK_MS = 250;                                    // time to grow from STICKY to STICKY_LOCKED
+const VOTE_MS = 350;                                    // a press goes to the key you were on most in this window
+const MAGNET = 0.35;                                    // how far the drawn cursor leans toward the key centre
+const PRIOR_POW = 0.5;                                  // how much likely next letters grow their hidden target
+const STICKY_UNUSED = 0;                                    // hover stays until the pointer is this far into a new key
 const CHIP_SLOTS = 4;
 const POINTER_KEY = "fourlooks.pointer.v1";
 const HOLD_KEY = "fourlooks.hold.v1";
@@ -149,6 +155,7 @@ function press(el, x, y) {
   else { typer.literal(k); record("symbol", { key: k }); }
   updateKeys();
   renderText();
+  updatePrior();
   mirror();
 }
 
@@ -201,24 +208,75 @@ function send() {
   });
 }
 
-// ---------- dwell, with sticky hover ----------
+// ---------- hover: sticky keys, hidden target growth, press voting ----------
 let hoverEl = null, hoverSince = 0, armed = true, cursorAt = null;
-function keyAt(x, y) {
-  const el = document.elementFromPoint(x, y);
-  return el ? el.closest("[data-key]") : null;
+let letterPrior = null;                // probability of each next letter, from the word model
+const history = [];                    // recent { t, el, x, y } for press voting
+
+// Next-letter odds after the letters typed so far, weighted by how common each word is.
+function updatePrior() {
+  if (!typer || layer !== "abc") { letterPrior = null; return; }
+  const prefix = typer.typedWord().toLowerCase().replace(/[^a-z]/g, "");
+  const w = new Array(26).fill(0);
+  const words = typer.dec.words, uni = typer.dec.uni;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i].replace(/'/g, "");
+    if (word.length <= prefix.length || !word.startsWith(prefix)) continue;
+    const k = LETTERS.indexOf(word[prefix.length]);
+    if (k >= 0) w[k] += 10 ** uni[i];
+  }
+  const z = w.reduce((a, b) => a + b, 0);
+  letterPrior = z > 0 ? w.map((v) => v / z) : null;
 }
-function stillOn(el, x, y) {
+
+const letterEls = () => document.querySelectorAll("#keys [data-key]");
+function keyAt(x, y) {
+  const hit = document.elementFromPoint(x, y)?.closest("[data-key]") || null;
+  const onLetters = !hit || (hit.dataset.key.length === 1 && LETTERS.includes(hit.dataset.key));
+  if (!letterPrior || !onLetters || !letterCenters.length) return hit;
+  // Letters near the pointer compete: closeness times how likely the word model says they are next.
+  const s = 0.5 * keyWidth;
+  let best = null, bestScore = 0;
+  for (const c of letterCenters) {
+    const d2 = (x - c.x) ** 2 + (y - c.y) ** 2;
+    if (d2 > (1.1 * keyWidth) ** 2) continue;
+    const score = Math.exp(-d2 / (2 * s * s)) * (letterPrior[LETTERS.indexOf(c.letter)] + 0.02) ** PRIOR_POW;
+    if (score > bestScore) { bestScore = score; best = c.letter; }
+  }
+  if (!best) return hit;
+  return [...letterEls()].find((el) => el.dataset.key === best) || hit;
+}
+function stillOn(el, x, y, t) {
   if (!el || !el.isConnected) return false;
-  const r = el.getBoundingClientRect(), m = STICKY * Math.min(r.width, r.height);
+  const grow = Math.min(1, (t - hoverSince) / LOCK_MS);
+  const r = el.getBoundingClientRect(), m = (STICKY + (STICKY_LOCKED - STICKY) * grow) * Math.min(r.width, r.height);
   return x > r.left - m && x < r.right + m && y > r.top - m && y < r.bottom + m;
+}
+// The key you were on for most of the last VOTE_MS, and where you were on it.
+function intended(t) {
+  const tally = new Map();
+  for (let i = 0; i < history.length; i++) {
+    const h = history[i];
+    if (t - h.t > VOTE_MS || !h.el) continue;
+    const dt = (history[i + 1]?.t ?? t) - h.t;
+    const e = tally.get(h.el) || { ms: 0, x: 0, y: 0, n: 0 };
+    tally.set(h.el, { ms: e.ms + dt, x: e.x + h.x, y: e.y + h.y, n: e.n + 1 });
+  }
+  let best = null;
+  for (const [el, e] of tally) if (!best || e.ms > best.ms) best = { el, ms: e.ms, x: e.x / e.n, y: e.y / e.n };
+  return best;
 }
 function setFill(el, p) { if (el) el.style.setProperty("--p", String(p)); }
 function movePointer(x, y, t) {
   cursorAt = [x, y];
+  const el = stillOn(hoverEl, x, y, t) ? hoverEl : keyAt(x, y);
+  history.push({ t, el, x, y });
+  while (history.length && t - history[0].t > VOTE_MS * 2) history.shift();
+  let dx = x, dy = y;
+  if (el) { const r = el.getBoundingClientRect(); dx += MAGNET * (r.left + r.width / 2 - x); dy += MAGNET * (r.top + r.height / 2 - y); }
   const c = $("cursor");
   c.style.display = "block";
-  c.style.transform = `translate3d(${x}px, ${y}px, 0)`;
-  const el = stillOn(hoverEl, x, y) ? hoverEl : keyAt(x, y);
+  c.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
   if (el !== hoverEl) {
     setFill(hoverEl, 0);
     hoverEl?.classList.remove("hover");
@@ -257,9 +315,10 @@ function onFrame(f) {
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
   if (c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
-    if (!blinkFired && f.t - blinkSince > cueCfg.ms && hoverEl && cursorAt) {
+    const target = intended(blinkSince);       // where you were when the press move started
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms && target) {
       blinkFired = true;
-      press(hoverEl, cursorAt[0], cursorAt[1]);
+      press(target.el, target.x, target.y);
       hoverSince = f.t; armed = false;
     }
   } else { blinkSince = null; blinkFired = false; }
@@ -393,6 +452,7 @@ addEventListener("resize", measure);
     const model = await (await fetch("/lm.json")).json();
     typer = new KeyTyper(new Decoder(model, { groups: LETTER_GROUPS }));
     typer.learn(loadWords());
+    updatePrior();
     window.fourLooks.typer = typer;
     updateKeys(); renderText();
     prompt(usingCamera ? "" : "The mouse works now. Start the camera for head control.");
