@@ -39,7 +39,7 @@ const LAYOUTS = {
     [..."qwertyuiop", "⌫"],
     [..."asdfghjkl", "'", "send"],
     ["shift", ..."zxcvbnm", ",", ".", "?"],
-    ["123", "layout", "menu", "mouse", "space", "undo", "fix", "speak"],
+    ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
   // Every letter on its own key, arranged for a head and not for hands. The ten most used letters
   // (e t a o i n s h r d) fill the middle row with the busiest in the centre, the next eight sit below
@@ -48,7 +48,7 @@ const LAYOUTS = {
     ["⌫", ..."qjvpbkxz", "'", "send"],
     [..."rsiaetonhd"],
     ["shift", ..."gwulcmfy", ",", ".", "?"],
-    ["123", "layout", "menu", "mouse", "space", "undo", "fix", "speak"],
+    ["123", "menu", "mouse", "space", "undo", "fix", "speak"],
   ],
   // Boxes: built around where the head rests, not where hands rest. Share of English letters by key:
   // def 19%, mno 17%, ghi 15%, pqrs 14%, tuv 13%, abc 13%, jkl 5%, wxyz 5%. The busiest key is in the
@@ -90,8 +90,8 @@ setInterval(() => {                        // every session is saved on this com
 window.fourLooks = { log };
 
 let typer = null;
-const LAYOUT_KEY = "fourlooks.layout.v2";
-const LETTER_LAYOUTS = ["head", "abc", "big"];        // head-arranged letters, QWERTY, letter-group boxes
+const LAYOUT_KEY = "fourlooks.layout.v3";
+const LETTER_LAYOUTS = ["head", "abc"];               // head-arranged letters and QWERTY. One letter per key, always.
 const LAYOUT_NAME = { head: "head", abc: "qwerty", big: "boxes" };
 let letters = (() => { try { const v = JSON.parse(localStorage.getItem(LAYOUT_KEY)); return LETTER_LAYOUTS.includes(v) ? v : "head"; } catch { return "head"; } })();
 let layer = letters;
@@ -949,6 +949,7 @@ const SETTINGS = [
     prompt(`Press move is now ${CUES[cueCfg.cue].name}. Choose Calibrate to fit it to you.`);
   } },
   { id: "presshold", label: "Press hold", value: () => pressName, run: () => { const names = Object.keys(PRESS_STEPS); pressName = names[(names.indexOf(pressName) + 1) % names.length]; pressExtra = PRESS_STEPS[pressName]; store(PRESS_KEY, pressName); } },
+  { id: "layout", label: "Key layout", value: () => LAYOUT_NAME[letters], run: () => { letters = LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); renderText(); } },
   { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = REACH_STEPS.includes(pointer.gain) ? cycle(REACH_STEPS, pointer.gain) : 1; store(REACH_KEY, pointer.gain); } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
