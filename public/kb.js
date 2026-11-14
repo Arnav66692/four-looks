@@ -522,7 +522,7 @@ function pickHover(x, y, t) {
   const inMenu = (el) => !!el && !!el.closest("#menu");
   if (hoverEl && inMenu(hoverEl) !== menuOpen) return menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
   const top = menuOpen ? onlyMenu(keyAt(x, y)) : keyAt(x, y);
-  // Before the lock the selection is simply the key under the cursor. Once locked (half the hold spent),
+  // Before the lock the selection is simply the key under the cursor. Once locked (a third of the hold spent),
   // the key holds through wobble past its edge and only a clear move deep into another key takes over.
   const zone = (el) => (el ? (el.closest("#chips") ? "chips" : el.closest("#keys") ? "keys" : "other") : null);
   if (top && hoverEl && zone(top) !== zone(hoverEl)) return top;      // the lock never reaches from a key into the suggestions, or back
