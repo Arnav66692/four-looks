@@ -1,0 +1,136 @@
+{
+  "when": "Sat Nov 14 2026 12:25:45 GMT-0800 (Pacific Standard Time)",
+  "sentences": 60,
+  "levels": [
+    {
+      "noise": 0.35,
+      "words": 313,
+      "truthInTop4": 99.7,
+      "wrongDecoder": 1.3,
+      "wrongJevAlone": 10.5,
+      "wrongCombined": 1.3,
+      "medianMs": 73,
+      "p90Ms": 100,
+      "inputTokens": 134539,
+      "costUsd": 0.00565,
+      "fixedByCombined": 1,
+      "brokenByCombined": 1,
+      "examples": [
+        {
+          "truth": "fasten",
+          "typed": "fzztrn",
+          "decoder": "fzztrn",
+          "combined": "fasten",
+          "after": "can you"
+        },
+        {
+          "truth": "whats",
+          "typed": "whats",
+          "decoder": "whats",
+          "combined": "what's",
+          "after": ""
+        }
+      ]
+    },
+    {
+      "noise": 0.5,
+      "words": 313,
+      "truthInTop4": 99.4,
+      "wrongDecoder": 5.4,
+      "wrongJevAlone": 19.8,
+      "wrongCombined": 4.2,
+      "medianMs": 71,
+      "p90Ms": 101,
+      "inputTokens": 134670,
+      "costUsd": 0.00566,
+      "fixedByCombined": 9,
+      "brokenByCombined": 5,
+      "examples": [
+        {
+          "truth": "happening",
+          "typed": "yappsnpnt",
+          "decoder": "yappsnpnt",
+          "combined": "happening",
+          "after": "what is"
+        },
+        {
+          "truth": "of",
+          "typed": "or",
+          "decoder": "of",
+          "combined": "or",
+          "after": "in the mood"
+        },
+        {
+          "truth": "see",
+          "typed": "qee",
+          "decoder": "are",
+          "combined": "see",
+          "after": ""
+        },
+        {
+          "truth": "toothpaste",
+          "typed": "roifhpawtw",
+          "decoder": "roifhpawtw",
+          "combined": "toothpaste",
+          "after": "pick up some"
+        },
+        {
+          "truth": "appreciate",
+          "typed": "sopfwxoste",
+          "decoder": "sopfwxoste",
+          "combined": "appreciate",
+          "after": "i really"
+        },
+        {
+          "truth": "beach",
+          "typed": "hravh",
+          "decoder": "teach",
+          "combined": "beach",
+          "after": "to go to"
+        },
+        {
+          "truth": "is",
+          "typed": "ue",
+          "decoder": "is",
+          "combined": "ur",
+          "after": ""
+        },
+        {
+          "truth": "boss",
+          "typed": "biaz",
+          "decoder": "boss",
+          "combined": "bias",
+          "after": "is my"
+        },
+        {
+          "truth": "choked",
+          "typed": "cuojef",
+          "decoder": "cuojef",
+          "combined": "choked",
+          "after": "the drain is"
+        },
+        {
+          "truth": "its",
+          "typed": "ota",
+          "decoder": "its",
+          "combined": "it's",
+          "after": ""
+        },
+        {
+          "truth": "my",
+          "typed": "jg",
+          "decoder": "it",
+          "combined": "my",
+          "after": ""
+        },
+        {
+          "truth": "midnight",
+          "typed": "mifbivyt",
+          "decoder": "mifbivyt",
+          "combined": "midnight",
+          "after": "be home by"
+        }
+      ]
+    }
+  ]
+}
