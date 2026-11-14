@@ -29,10 +29,10 @@ function fixture(script, overrides = {}) {
     key: async (...args) => { events.push(['key', ...args]); },
     scroll: async (...args) => { events.push(['scroll', ...args]); },
   };
-  let cursor = 0;
+  let cursor = 0, front = 'Safari';
   const agent = createAgent({
     openUrl: async (url) => { events.push(['open_url', url]); },
-    openApp: async (name) => { events.push(['open_app', name]); }, frontApp: async () => 'Safari',
+    openApp: async (name) => { events.push(['open_app', name]); front = name; }, frontApp: async () => front,
     mouse, typeText: async (text) => { events.push(['type', text]); },
     screenshot: async () => ({ pngBase64: 'ZmFrZQ==', width: 2000, height: 1000 }),
     ask: async (messages, tools) => {
@@ -280,8 +280,8 @@ await check('route refuses risky words, closing and unknown goals', () => {
   assert.equal(route(null), null);
 });
 
-await check('routed actions need zero ask calls, captures or front app requests', async () => {
-  const f = fixture([], { screenshot: async () => { throw new Error('Should not capture'); }, frontApp: async () => { throw new Error('Should not query app'); } });
+await check('routed actions need zero ask calls and no screenshot (an opened app is only checked for being in front)', async () => {
+  const f = fixture([], { screenshot: async () => { throw new Error('Should not capture'); } });
   const result = await f.agent.run('open gmail then open notes app then type Hello');
   assert.equal(result.ok, true); assert.equal(result.routed, true); assert.equal(result.modelCalls, 0); assert.equal(result.modelMs, 0);
   assert.equal(f.requests.length, 0); assert.equal(result.steps, 3);
@@ -728,6 +728,66 @@ await check('a declined nod leaves the text message typed but not sent', async (
   assert.equal(result.stoppedWhy, 'Confirmation declined');
   assert.equal(f.events.filter(([name, code]) => name === 'key' && code === 36).length, 1);
   assert.deepEqual(f.events.at(-1), ['type', 'see you at noon']);
+});
+
+await check('an app that never comes to the front stops the run before anything is typed', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, ms, ...args) => realSetTimeout(callback, 0, ...args);
+  try {
+    const f = fixture([batch(call('open_app', { name: 'Notes' }), call('type', { text: 'hello' }))], { openApp: async () => {}, frontApp: async () => 'Safari' });
+    const result = await f.agent.run('Write hello in my notes');
+    assert.equal(result.ok, false);
+    assert.match(result.stoppedWhy, /did not come to the front/);
+    assert.equal(f.events.some(([name]) => name === 'type'), false);
+  } finally { globalThis.setTimeout = realSetTimeout; }
+});
+
+const PROMPT = { ok: true, app: 'UserNotificationCenter', window: '', truncated: false, elements: [
+  { id: 1, role: 'AXButton', name: 'Allow', x: 700, y: 400, w: 80, h: 30 },
+  { id: 2, role: 'AXButton', name: 'Open System Settings', x: 820, y: 400, w: 160, h: 30 },
+] };
+
+await check('a macOS permission prompt in front stops the run before the model is asked', async () => {
+  const f = fixture([call('press', { id: 1, reason: 'Dismiss the prompt' })], { elements: async () => PROMPT });
+  const result = await f.agent.run('Put hello into the document in this window');
+  assert.equal(result.ok, false);
+  assert.equal(result.stoppedWhy, 'System window in front');
+  assert.equal(result.modelCalls, 0);
+  assert.equal(f.events.length, 0);
+  assert.equal(f.confirmations.length, 0);
+});
+
+await check('a permission prompt that appears mid-run stops it without pressing anything', async () => {
+  let turn = 0;
+  const f = fixture([call('key', { name: 'tab' }), call('press', { id: 1, reason: 'Dismiss the prompt' })], { elements: async () => (turn++ === 0 ? CONTROLS : PROMPT) });
+  const result = await f.agent.run('Move the focus along in this window');
+  assert.equal(result.stoppedWhy, 'System window in front');
+  assert.equal(f.events.filter(([name]) => name === 'click').length, 0);
+  assert.equal(result.modelCalls, 1);
+});
+
+await check('with no control list, a system app in front blocks typing and keys', async () => {
+  for (const app of ['SecurityAgent', 'System Settings', 'loginwindow']) {
+    const f = fixture([call('type', { text: 'hello' })], { frontApp: async () => app });
+    const result = await f.agent.run('Write hello for me');
+    assert.equal(result.stoppedWhy, 'System window in front');
+    assert.equal(f.events.length, 0);
+    // the fast path is held to the same rule
+    const fast = fixture([], { frontApp: async () => app });
+    const routed = await fast.agent.run('type hello');
+    assert.equal(routed.stoppedWhy, 'System window in front');
+    assert.equal(fast.events.length, 0);
+  }
+});
+
+await check('a button named Allow, Install or Accept in any app waits for a nod', async () => {
+  for (const name of ['Allow', 'Install', 'Accept all', 'Sign in', 'Trust']) {
+    const f = fixture([call('press', { id: 1 })], { elements: async () => ({ ok: true, app: 'Safari', window: '', truncated: false, elements: [{ id: 1, role: 'AXButton', name, x: 10, y: 10, w: 40, h: 20 }] }) });
+    const result = await f.agent.run('Carry on in this window');
+    assert.equal(f.confirmations.length, 1);
+    assert.equal(f.events.filter(([n]) => n === 'click').length, 0);
+    assert.equal(result.stoppedWhy, 'Confirmation declined');
+  }
 });
 
 await check('look still brings a screenshot when the list is not enough', async () => {

@@ -203,6 +203,28 @@ async function createWindow() {
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   await win.loadURL(`http://localhost:${process.env.PORT}/?desktop=1${process.env.FL_STUDY ? `&study=${process.env.FL_STUDY}` : ""}`);
+  if (process.env.FL_GROK_TEST) selfTest(win, process.env.FL_GROK_TEST);
+}
+
+// Self-test: FL_GROK_TEST="goal one|goal two=>no" runs each goal through the real page and the real
+// agent, with no face needed, prints what happened and quits. "=>no" or "=>yes" stands in for the nod.
+async function selfTest(win, spec) {
+  const say = (line) => process.stdout.write(`grok-test: ${line}\n`);
+  try {
+    for (let i = 0; i < 60 && !(await win.webContents.executeJavaScript("!!(window.fourLooks && window.fourLooks.typer && window.fourLooks.grokGoal)")); i++) await new Promise((r) => setTimeout(r, 250));
+    say(`screen recording permission: ${process.platform === "darwin" ? systemPreferences.getMediaAccessStatus("screen") : "n/a"}, accessibility: ${systemPreferences.isTrustedAccessibilityClient(false)}`);
+    for (const part of spec.split("|")) {
+      const [goal, nod] = part.split("=>").map((x) => x.trim());
+      const auto = nod === "yes" ? "true" : nod === "no" ? "false" : "null";
+      const t0 = Date.now();
+      const r = await win.webContents.executeJavaScript(`window.fourLooks.grokGoal(${JSON.stringify(goal)}, ${auto})`);
+      say(`${JSON.stringify(goal)} took ${Date.now() - t0} ms, overlay ${overlay && !overlay.isDestroyed() ? JSON.stringify(overlay.getBounds()) : "none"}`);
+      say(JSON.stringify(r));
+      if (overlay && !overlay.isDestroyed()) say(`overlay page: ${JSON.stringify(await overlay.webContents.executeJavaScript("({ cls: document.getElementById('g').className, text: document.getElementById('say').textContent, at: document.getElementById('g').style.transform, win: [screenX, screenY, innerWidth, innerHeight] })"))}`);
+      await new Promise((r2) => setTimeout(r2, 1200));
+    }
+  } catch (err) { say(`failed: ${err?.message || err}`); }
+  quit("self-test finished");
 }
 
 app.whenReady().then(() => {

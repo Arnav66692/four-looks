@@ -55,7 +55,7 @@ function single(raw) {
     if (!to || !words || /[\r\n\t]/.test(to + words)) return null;
     return { summary: `Sent to ${to}: ${words}`, actions: [
       { name: 'open_app', args: { name: 'Messages', reason: 'Opening Messages' } },
-      { name: 'wait', args: { ms: 600, reason: 'Waiting for Messages' } },
+      { name: 'wait', args: { ms: 300, reason: 'Waiting for Messages' } },      // open_app has already waited for it to be in front
       { name: 'key', args: { name: 'cmd+n', reason: 'New message' } },
       { name: 'wait', args: { ms: 300, reason: 'New message' } },
       { name: 'type', args: { text: to, reason: `Finding ${to}` } },

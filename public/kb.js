@@ -715,7 +715,10 @@ function stopGrok(why) {
 }
 out?.onAgent?.((ev) => {
   if (!grok.busy) return;
-  if (ev.type === "confirm") { grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod = yes. Shake = no.`); }
+  if (ev.type === "confirm") {
+    grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod = yes. Shake = no.`);
+    if (grokAuto != null) setTimeout(() => answerGrok(grokAuto), 400);      // self-test only: no face to nod
+  }
   else if (ev.type === "step") dockHint(ev.action === "thinking" ? "Grok is thinking." : `Grok: ${ev.reason || ev.action}`);
 });
 // Three quick blinks (or the eye icon) make Grok listen. The text box becomes the command line and the
@@ -788,9 +791,9 @@ async function runGrok() {
   if (!goal) { prompt("Type what you want done, then press do it. Or pick one on top."); return; }
   const back = grokFrom;
   const local = APP_COMMANDS.find(([re]) => re.test(goal.replace(/[.!?]+$/, "")));
-  if (local) { record("grok-local", { goal }); exitGrokMode(); local[1](); return; }
+  if (local) { record("grok-local", { goal }); exitGrokMode(); local[1](); return { ok: true, local: true }; }
   const run = out?.agentRun || (params.get("sim") ? fakeAgent.run : null);
-  if (!run || !desk) { prompt("Grok control needs the desktop app."); return; }
+  if (!run || !desk) { prompt("Grok control needs the desktop app."); return { ok: false, stoppedWhy: "needs the desktop app" }; }
   exitGrokMode();
   grok.busy = true; grok.confirm = null;
   record("grok", { goal });
@@ -817,8 +820,23 @@ async function runGrok() {
     await setMode("keyboard", "grok done");
     prompt(said);
   }
+  return r;
 }
 window.fourLooks.runGrok = runGrok;
+// The desktop app's self-test runs a goal through the very same path as three blinks and "do it":
+// Grok mode, the command line, the dock, the agent, and back. autoAnswer stands in for the nod.
+let grokAuto = null;
+window.fourLooks.grokGoal = async (goal, autoAnswer = null) => {
+  grokAuto = autoAnswer;
+  const steps = [];
+  const watch = (ev) => { if (ev.type === "step" && ev.action !== "thinking") steps.push(ev.reason || ev.action); if (ev.type === "confirm") steps.push(`ASKED: ${ev.text}`); };
+  out?.onAgent?.(watch);
+  await enterGrokMode("self-test");
+  typer.clear(); typer.committed = goal;
+  const result = await runGrok();
+  grokAuto = null;
+  return { result, steps, dock: document.querySelector("#dock .hint")?.textContent, prompt: $("prompt").textContent, mode, grokMode };
+};
 
 // ---------- nod: a quick, clear dip and return of the head accepts the grey guess ----------
 // Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
