@@ -28,7 +28,8 @@ async function pickModel(key) {
   const r = await fetch(`${XAI}/models`, { headers: { authorization: `Bearer ${key}` } });
   if (!r.ok) throw new Error(`model list failed (${r.status})`);
   const ids = ((await r.json()).data || []).map((m) => m.id).filter((id) => /grok/i.test(id) && !/image|vision|imagine/i.test(id));
-  grokModel = ids.find((id) => /fast|mini/i.test(id)) || ids[0];
+  // Lowest-priced general text model on xAI's pricing page (read Nov 14 2026), else whatever the key offers.
+  grokModel = ids.find((id) => id === "grok-4.3") || ids.find((id) => /fast|mini/i.test(id)) || ids[0];
   if (!grokModel) throw new Error("no Grok text model on this key");
   return grokModel;
 }
