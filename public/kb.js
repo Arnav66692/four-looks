@@ -11,7 +11,8 @@ const params = new URLSearchParams(location.search);
 const DWELL = Number(params.get("dwell") || 1000);     // ms on a key to press it
 const CUE_KEY = "fourlooks.cue.v1";                     // which face move presses, with its per-person line and length
 const REACH_KEY = "fourlooks.reach.v2";
-const REACH_STEPS = [1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
+const TUNE_KEY = "fourlooks.tune.v1";                   // sensitivity and smoothing found by the tuning run
+const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
 const STICKY = 0.2;                                     // margin (in key sizes) a fresh hover keeps
 const STICKY_LOCKED = 0.45;                             // margin once you have stayed on a key a moment
@@ -683,7 +684,9 @@ function applyTheme() {
   requestAnimationFrame(measure);
 }
 applyTheme();
-pointer.gain = REACH_STEPS.includes(loadReach()) ? loadReach() : 1;
+pointer.gain = loadReach() >= 0.4 && loadReach() <= 2.5 ? loadReach() : 1;
+let tuned = { name: "medium", smoothing: { minCutoff: 0.35, beta: 2.2, deadzone: 0.005 } };
+try { const t = JSON.parse(localStorage.getItem(TUNE_KEY)); if (t?.smoothing) { tuned = t; pointer.smoothing(t.smoothing); } } catch { /* keep defaults */ }
 // ---------- camera view and admin view ----------
 const flag = (key, fallback) => { try { const v = JSON.parse(localStorage.getItem(key)); return typeof v === "boolean" ? v : fallback; } catch { return fallback; } };
 let camView = flag("fourlooks.camview.v1", true);
@@ -717,13 +720,18 @@ function drawAdmin(f, c) {
 applyViews();
 
 let studyRunning = false;
-async function startStudy() {
+async function startStudy(kind = "study") {
   if (studyRunning || !usingCamera || !pointer.ready) { prompt("Start the camera and calibrate first."); return; }
   studyRunning = true;
-  const { runStudy } = await import("./study.js");
+  const { runStudy, runTune } = await import("./study.js");
   const box = $("studybox");
   try {
-    await runStudy({
+    await (kind === "tune" ? runTune : runStudy)({
+      tune: {
+        get: () => ({ gain: pointer.gain, name: tuned.name, smoothing: tuned.smoothing }),
+        set: (gain, smoothing) => { pointer.gain = gain; pointer.smoothing(smoothing); },
+        apply: (gain, smoothing, name) => { pointer.gain = gain; pointer.smoothing(smoothing); tuned = { name, smoothing }; store(REACH_KEY, gain); store(TUNE_KEY, tuned); refreshMenu(); },
+      },
       prompt, record, cursor: () => cursorAt, pressNow: () => CUES[cueCfg.cue].firm,
       onFrame: (fn) => { study.watchers.add(fn); return () => study.watchers.delete(fn); },
       capture: (on, onPress = null, onNod = null) => { study.capture = on; study.onPress = onPress; study.onNod = onNod; },
@@ -746,9 +754,11 @@ setInterval(() => {                         // no calibration yet: start one onc
   if (!faceSince) faceSince = performance.now();
   else if (performance.now() - faceSince > 1000) { faceSince = 0; calibrate(); }
 }, 500);
-if (params.get("study") === "1") {           // started with "npm run study": begin once the camera and both calibrations are ready
+if (params.get("study")) {                   // "npm run study" or "npm run tune": begin once the camera and calibration are ready
+  const kind = params.get("study") === "tune" ? "tune" : "study";
   const wait = setInterval(() => {
-    if (usingCamera && pointer.ready && cueCfg.calibrated && !calibrating) { clearInterval(wait); setTimeout(startStudy, 1500); }
+    const pressReady = cueCfg.calibrated || holdToPress || kind === "tune";
+    if (usingCamera && pointer.ready && pressReady && !calibrating) { clearInterval(wait); setTimeout(() => startStudy(kind), 1500); }
   }, 1000);
 }
 
@@ -764,11 +774,12 @@ const SETTINGS = [
     cueCfg = { ...DEFAULT_CUE, cue: cycle(CUE_ORDER, cueCfg.cue) }; store(CUE_KEY, cueCfg);
     prompt(`Press move is now ${CUES[cueCfg.cue].name}. Choose Calibrate to fit it to you.`);
   } },
-  { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = cycle(REACH_STEPS, pointer.gain) || 1; store(REACH_KEY, pointer.gain); } },
+  { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = REACH_STEPS.includes(pointer.gain) ? cycle(REACH_STEPS, pointer.gain) : 1; store(REACH_KEY, pointer.gain); } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
   { id: "admin", label: "Admin view", value: () => (adminOn ? "on" : "off"), run: () => { adminOn = !adminOn; store("fourlooks.admin.v1", adminOn); applyViews(); } },
-  { id: "study", label: "Run the test", value: () => "3 minutes", run: () => { toggleMenu(false); startStudy(); } },
+  { id: "tune", label: "Tune to me", value: () => `${tuned.name} smoothing`, run: () => { toggleMenu(false); startStudy("tune"); } },
+  { id: "study", label: "Run the test", value: () => "90 seconds", run: () => { toggleMenu(false); startStudy(); } },
   { id: "calibrate", label: "Calibrate", value: () => "pointer, then press move", run: () => { toggleMenu(false); calibrate(); } },
   { id: "camera", label: "Camera", value: () => (usingCamera ? "on" : "off"), run: () => startCamera() },
   { id: "clear", label: "Clear text", value: () => "", run: () => { typer.save(); typer.clear(); mirrored = ""; record("clear"); renderText(); updatePrior(); } },

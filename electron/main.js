@@ -64,7 +64,7 @@ async function createWindow() {
   });
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  await win.loadURL(`http://localhost:${process.env.PORT}/?desktop=1${process.env.FL_STUDY ? "&study=1" : ""}`);
+  await win.loadURL(`http://localhost:${process.env.PORT}/?desktop=1${process.env.FL_STUDY ? `&study=${process.env.FL_STUDY}` : ""}`);
 }
 
 app.whenReady().then(() => {

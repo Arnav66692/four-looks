@@ -55,6 +55,13 @@ export class HeadPointer {
   }
   get ready() { return !!(this.map || this.range); }
 
+  // Change how much the cursor is smoothed. Restarts the filters so the change is felt at once.
+  smoothing({ minCutoff, beta, deadzone }) {
+    this.fx = new OneEuro(minCutoff, beta); this.fy = new OneEuro(minCutoff, beta);
+    this.deadzone = deadzone; this.shown = null;
+    this.smooth = { minCutoff, beta, deadzone };
+  }
+
   // poses: head pose samples (means). targets: matching points in 0..1 screen units.
   fit(poses, targets) { this.map = fitAffine(poses, targets); this.range = null; this.offset = [0, 0]; }
 

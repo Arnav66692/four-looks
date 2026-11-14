@@ -9,7 +9,7 @@ const load = (p) => readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) 
 let path = process.argv[2];
 if (!path) {
   const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  path = files.find((f) => load(f).some((e) => e.type === "study-start"));
+  path = files.find((f) => load(f).some((e) => e.type === "study-start" || e.type === "tune-start"));
   if (!path) { console.error("no saved test found in data/sessions"); process.exit(1); }
 }
 const ev = load(path);
@@ -120,6 +120,17 @@ if (ty.length) {
     say(`   ${({ head: "head layout", abc: "QWERTY", big: "boxes" })[which]}  ${right.length} of ${d.length} sentences exact, ${wpm.length ? mean(wpm).toFixed(1) : "-"} words a minute, ${undos} undo or delete presses`);
     if (right.length < d.length) flags.push(`${({ head: "Head layout", abc: "QWERTY", big: "Boxes" })[which]}: ${d.length - right.length} of ${d.length} sentences not finished exactly in 75 s (got "${d.find((e) => !right.includes(e)).got}").`);
   }
+}
+
+const tr = ev.filter((e) => e.type === "tune-result").pop();
+if (tr) {
+  say(`\n7. Tuning run (one letter key as the target, hold 0.5 s)`);
+  say(`   reach  smoothing  held   avg time   slips   path   overshoot`);
+  for (const r of tr.results) say(`   ${String(r.gain).padEnd(5)}  ${r.smooth.padEnd(9)}  ${r.held} of ${r.of}  ${String(r.meanMs).padStart(5)} ms   ${String(r.slips).padStart(4)}   ${String(r.pathRatio).padStart(4)}x  ${String(r.overshootPx).padStart(4)} px${r === tr.results.find((x) => x.gain === tr.best.gain && x.smooth === tr.best.smooth) ? "   <- best" : ""}`);
+  say(`   drift of the rest position over the run: ${tr.drift.px} px (${tr.drift.yawDeg} deg turn, ${tr.drift.pitchDeg} deg nod)`);
+  for (const r of ev.filter((e) => e.type === "tune-rest")) say(`   rest ${r.label.padEnd(6)}  at ${r.x}, ${r.y}  wobble ${r.wobblePx} px  head ${r.yawDeg} deg turn, ${r.pitchDeg} deg nod`);
+  if (!tr.usable) flags.push("No sensitivity and smoothing mix let this person hold 60% of letter-key targets: letter keys are too small for this pointer, use boxes or a different pointing method.");
+  if (tr.drift.px > 60) flags.push(`Rest position drifted ${tr.drift.px} px during the tuning run: recenter is needed regularly.`);
 }
 
 say(`\nChokepoints, worst first`);

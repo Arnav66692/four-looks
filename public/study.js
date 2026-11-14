@@ -100,3 +100,105 @@ export async function runStudy(app) {
   await sleep(2000);
   prompt("Ready.");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Tuning run: the same targets under each mix of sensitivity and smoothing, to find what suits
+// this person. Measures speed, slips off the target, overshoot, and drift of the rest position.
+// ---------------------------------------------------------------------------------------------
+const GAINS = [0.7, 1.0, 1.4];
+const SMOOTHING = {
+  light: { minCutoff: 0.8, beta: 3.0, deadzone: 0.003 },
+  medium: { minCutoff: 0.35, beta: 2.2, deadzone: 0.005 },
+  heavy: { minCutoff: 0.15, beta: 1.2, deadzone: 0.009 },
+};
+const TUNE_SPOTS = [[0.14, 0.22], [0.84, 0.8], [0.5, 0.2], [0.16, 0.82], [0.86, 0.24]];
+const TUNE_HOLD = 500, TUNE_CAP = 4500;
+
+export async function runTune(app) {
+  const { prompt, record, target, onFrame, capture, tune } = app;
+  let tag = "";
+  const stop = onFrame((f, ctx) => { if (tag) record("s-frame", { tag, x: Math.round(ctx.cursor?.[0] ?? -1), y: Math.round(ctx.cursor?.[1] ?? -1), yaw: +(f.pose?.[0] ?? 0).toFixed(4), pitch: +(f.pose?.[1] ?? 0).toFixed(4) }); });
+  const say = async (text, ms) => { prompt(text, true); await sleep(ms); };
+  const k = document.getElementById("keys").getBoundingClientRect();
+  const w = k.width / 11, h = k.height / 4.4;                          // one letter key
+  const before = tune.get();
+  record("tune-start", { w: innerWidth, h: innerHeight, keyW: Math.round(w), keyH: Math.round(h), before });
+  capture(true);
+
+  // Rest position, measured three times: any change from first to last is drift.
+  const rests = [];
+  const rest = async (label) => {
+    await say("Face the middle and hold still.", 1800);
+    const xs = [], ys = [], yaw = [], pitch = [];
+    const off = onFrame((f, ctx) => { if (ctx.cursor) { xs.push(ctx.cursor[0]); ys.push(ctx.cursor[1]); } if (f.pose) { yaw.push(f.pose[0]); pitch.push(f.pose[1]); } });
+    tag = `rest-${label}`; await sleep(3000); tag = ""; off();
+    const mean = (a) => (a.length ? a.reduce((p, c) => p + c, 0) / a.length : 0);
+    const sd = (a) => { const m = mean(a); return Math.sqrt(mean(a.map((v) => (v - m) ** 2))); };
+    const r = { label, x: mean(xs), y: mean(ys), wobble: Math.hypot(sd(xs), sd(ys)), yaw: mean(yaw), pitch: mean(pitch) };
+    rests.push(r);
+    record("tune-rest", { label, x: Math.round(r.x), y: Math.round(r.y), wobblePx: +r.wobble.toFixed(1), yawDeg: +((r.yaw * 180) / Math.PI).toFixed(2), pitchDeg: +((r.pitch * 180) / Math.PI).toFixed(2) });
+  };
+
+  tune.set(1.0, SMOOTHING.medium);
+  await rest("start");
+  const results = [];
+  const order = [];
+  for (const g of GAINS) for (const s of Object.keys(SMOOTHING)) order.push([g, s]);
+  for (let n = 0; n < order.length; n++) {
+    const [gain, smooth] = order[n];
+    tune.set(gain, SMOOTHING[smooth]);
+    await say(`Setting ${n + 1} of ${order.length}. Move onto each box and stay on it.`, 1700);
+    const trials = [];
+    for (const [fx, fy] of TUNE_SPOTS) {
+      const cx = k.left + fx * k.width, cy = k.top + fy * k.height;
+      target.show(cx, cy, w, h);
+      prompt("");
+      const t0 = performance.now();
+      const start = app.cursor() || [cx, cy];
+      const dist0 = Math.hypot(start[0] - cx, start[1] - cy);
+      let inside = 0, reached = null, slips = 0, wasOn = false, path = 0, last = start, far = 0;
+      tag = `tune-${gain}-${smooth}`;
+      while (performance.now() - t0 < TUNE_CAP) {
+        await sleep(33);
+        const c = app.cursor();
+        if (!c) continue;
+        path += Math.hypot(c[0] - last[0], c[1] - last[1]); last = c;
+        const on = Math.abs(c[0] - cx) < w / 2 && Math.abs(c[1] - cy) < h / 2;
+        if (on) { inside += 33; if (reached == null) reached = performance.now() - t0; }
+        else { if (wasOn) slips++; inside = 0; if (reached != null) far = Math.max(far, Math.hypot(c[0] - cx, c[1] - cy)); }
+        wasOn = on;
+        if (inside >= TUNE_HOLD) break;
+      }
+      tag = "";
+      const trial = { ok: inside >= TUNE_HOLD, ms: Math.round(performance.now() - t0), reachedMs: reached == null ? null : Math.round(reached), slips, pathRatio: +(path / Math.max(dist0, 1)).toFixed(2), overshootPx: Math.round(far) };
+      trials.push(trial);
+      record("tune-trial", { gain, smooth, fx, fy, ...trial });
+      target.hide();
+      await sleep(250);
+    }
+    const okT = trials.filter((t) => t.ok);
+    const mean = (a) => (a.length ? a.reduce((p, c) => p + c, 0) / a.length : 0);
+    const row = {
+      gain, smooth, held: okT.length, of: trials.length,
+      meanMs: Math.round(mean(trials.map((t) => (t.ok ? t.ms : TUNE_CAP + 1500)))),
+      slips: +mean(trials.map((t) => t.slips)).toFixed(1), pathRatio: +mean(trials.map((t) => t.pathRatio)).toFixed(2), overshootPx: Math.round(mean(trials.map((t) => t.overshootPx))),
+    };
+    row.cost = Math.round(row.meanMs + 400 * row.slips);            // slower or slipping more costs more
+    results.push(row);
+    record("tune-setting", row);
+    if (n === Math.floor(order.length / 2)) { tune.set(1.0, SMOOTHING.medium); await rest("middle"); }
+  }
+  tune.set(1.0, SMOOTHING.medium);
+  await rest("end");
+  const best = [...results].sort((a, b) => a.cost - b.cost)[0];
+  const drift = { px: Math.round(Math.hypot(rests[rests.length - 1].x - rests[0].x, rests[rests.length - 1].y - rests[0].y)),
+    yawDeg: +(((rests[rests.length - 1].yaw - rests[0].yaw) * 180) / Math.PI).toFixed(2), pitchDeg: +(((rests[rests.length - 1].pitch - rests[0].pitch) * 180) / Math.PI).toFixed(2) };
+  const usable = best.held >= Math.ceil(best.of * 0.6);
+  if (usable) tune.apply(best.gain, SMOOTHING[best.smooth], best.smooth); else tune.apply(before.gain, before.smoothing, before.name);
+  record("tune-result", { best, usable, drift, results });
+  capture(false);
+  stop();
+  prompt(usable ? `Tuned to you: reach ${best.gain}x with ${best.smooth} smoothing. Drift over the run: ${drift.px} px.` : "No setting let you hold enough boxes, so nothing was changed. The run is saved.", true);
+  await sleep(3500);
+  prompt("Ready.");
+}

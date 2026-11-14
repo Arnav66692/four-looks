@@ -14,6 +14,7 @@
     "app": "electron .",
     "eval": "node tools/eval.mjs dev",
     "study": "FL_STUDY=1 electron .",
-    "analyze": "node tools/analyze-session.mjs"
+    "analyze": "node tools/analyze-session.mjs",
+    "tune": "FL_STUDY=tune electron ."
   }
 }
