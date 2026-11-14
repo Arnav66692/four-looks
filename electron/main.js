@@ -65,4 +65,6 @@ app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => quit("window closed"));
 app.on("render-process-gone", (_e, _wc, d) => process.stdout.write(`four looks page crashed: ${d.reason} ${d.exitCode}\n`));
 app.on("child-process-gone", (_e, d) => process.stdout.write(`four looks helper gone: ${d.type} ${d.reason}\n`));
-process.on("SIGTERM", () => quit("stopped from outside (SIGTERM)"));
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => quit(`stopped from outside (${sig})`));
+process.on("uncaughtException", (err) => { process.stdout.write(`four looks error: ${err.stack || err}\n`); });
+app.on("quit", (_e, code) => process.stdout.write(`four looks exited with code ${code}\n`));
