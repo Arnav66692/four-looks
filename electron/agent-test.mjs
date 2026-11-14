@@ -425,17 +425,10 @@ await check('only requested delays are used for glide, input and screenshot sett
     assert.ok(delays.at(-1) > 250 && delays.at(-1) <= 350);
     for (const message of [call('open_url', { url: 'https://example.com' }), call('open_app', { name: 'Notes' })]) {
       delays.length = 0;
-      // Opening a link or an app alone finishes the run: no settle wait and no second model call.
       const opened = fixture([message, call('done', { summary: 'Opened' })]);
-      const result = await opened.agent.run('Navigate');
-      assert.equal(result.ok, true);
-      assert.equal(result.modelCalls, 1);
-      assert.deepEqual(delays, []);
-      // With a key press after it the run goes on, and the next screenshot waits for the page to settle.
-      delays.length = 0;
-      const more = fixture([batch(message.tool_calls[0] && message, call('key', { name: 'tab' })), call('done', { summary: 'Opened' })]);
-      assert.equal((await more.agent.run('Navigate')).ok, true);
-      assert.ok(delays.some((ms) => ms > 150 && ms <= 350));
+      assert.equal((await opened.agent.run('Navigate')).ok, true);
+      assert.equal(delays.length, 1);
+      assert.ok(delays[0] > 250 && delays[0] <= 350);
     }
     delays.length = 0;
     const immediate = fixture([batch(call('open_url', { url: 'https://example.com' }), call('done', { summary: 'Opened' }))]);
@@ -634,12 +627,78 @@ await check('questions and show-me requests take the search fast path, screen qu
   assert.equal(route('what is the code for this'), null);
 });
 
-await check('a batch of only open_url ends the run with one model call', async () => {
-  const f = fixture([call('open_url', { url: 'https://example.com/' })]);
-  const result = await f.agent.run('Take a look around the example site for a while');
+await check('opening an app alone does not end the run: the model must say done', async () => {
+  const f = fixture([call('open_app', { name: 'Messages' }), call('done', { summary: 'Finished' })]);
+  const result = await f.agent.run('Text a friend that the meeting moved');
+  assert.equal(result.ok, true);
+  assert.equal(result.modelCalls, 2);
+  assert.equal(result.summary, 'Finished');
+});
+
+const CONTROLS = { ok: true, app: 'Messages', window: 'Messages', truncated: false, elements: [
+  { id: 1, role: 'AXButton', name: 'Compose', x: 300, y: 40, w: 30, h: 30 },
+  { id: 2, role: 'AXRow', name: 'Sam', x: 160, y: 140, w: 300, h: 64 },
+  { id: 3, role: 'AXButton', name: 'Send', x: 900, y: 450, w: 40, h: 30 },
+  { id: 4, role: 'AXSecureTextField', name: 'Password', x: 500, y: 300, w: 200, h: 30 },
+] };
+
+await check('the first turn carries the named controls as text, with no image', async () => {
+  const f = fixture([call('done', { summary: 'Nothing to do' })], { elements: async () => CONTROLS });
+  await f.agent.run('Check the conversation list for me');
+  const first = f.requests[0].messages.at(-1).content;
+  assert.equal(typeof first, 'string');
+  assert.match(f.requests[0].messages.at(-2).content, /^Goal: /);
+  assert.match(first, /2 Row "Sam"/);
+  assert.match(first, /Front app: Messages/);
+});
+
+await check('press clicks the exact centre of the listed control, then types, in one model call', async () => {
+  const f = fixture([batch(call('press', { id: 2 }), call('type', { text: 'See you at noon' }), call('done', { summary: 'Typed the reply' }))], { elements: async () => CONTROLS });
+  const result = await f.agent.run('Draft a reply to Sam saying see you at noon');
   assert.equal(result.ok, true);
   assert.equal(result.modelCalls, 1);
-  assert.deepEqual(f.events, [['open_url', 'https://example.com/']]);
+  assert.deepEqual(f.events.filter(([name]) => name === 'move').at(-1), ['move', 160, 140]);
+  assert.deepEqual(f.events.filter(([name]) => name !== 'move'), [['click', 'left', 1], ['type', 'See you at noon']]);
+  assert.equal(f.requests.some((r) => r.messages.some((m) => Array.isArray(m.content))), false);
+});
+
+await check('pressing a control named Send asks first even when the model says it is safe', async () => {
+  const f = fixture([call('press', { id: 3 })], { elements: async () => CONTROLS });
+  const result = await f.agent.run('Finish up in this window');
+  assert.equal(f.confirmations.length, 1);
+  assert.match(f.confirmations[0], /Send/);
+  assert.equal(f.events.filter(([name]) => name === 'click').length, 0);
+  assert.equal(result.stoppedWhy, 'Confirmation declined');
+});
+
+await check('typing after pressing a secure field is refused', async () => {
+  const f = fixture([batch(call('press', { id: 4 }), call('type', { text: 'hello there' }))], { elements: async () => CONTROLS });
+  const result = await f.agent.run('Fill in the form in this window');
+  assert.equal(result.stoppedWhy, 'Sensitive text refused');
+  assert.equal(f.events.some(([name]) => name === 'type'), false);
+});
+
+await check('an unknown press id is reported to the model and the run goes on with a fresh list', async () => {
+  const f = fixture([call('press', { id: 99 }), call('done', { summary: 'Gave up cleanly' })], { elements: async () => CONTROLS });
+  const result = await f.agent.run('Poke around this window');
+  assert.equal(result.ok, true);
+  assert.equal(result.modelCalls, 2);
+  assert.equal(f.events.length, 0);
+  assert.match(f.requests[1].messages.find((m) => m.role === 'tool').content, /no control with that id/);
+});
+
+await check('after acting the next turn gets a fresh control list, not a screenshot', async () => {
+  const f = fixture([call('key', { name: 'tab' }), call('done', { summary: 'Moved focus' })], { elements: async () => CONTROLS });
+  await f.agent.run('Move the focus along in this window');
+  assert.equal(f.requests[1].messages.some((m) => Array.isArray(m.content)), false);
+  assert.match(f.requests[1].messages.at(-1).content, /Controls, press by id/);
+  assert.equal(f.requests[1].messages.filter((m) => typeof m.content === 'string' && /Controls, press by id/.test(m.content)).length, 1);
+});
+
+await check('look still brings a screenshot when the list is not enough', async () => {
+  const f = fixture([call('look'), call('done', { summary: 'Saw it' })], { elements: async () => CONTROLS });
+  await f.agent.run('Describe the picture in this window');
+  assert.equal(f.requests[1].messages.some((m) => Array.isArray(m.content)), true);
 });
 
 console.log(`${passes} passed, ${failures} failed`);
