@@ -16,6 +16,8 @@ const APPS = {
   'vs code': 'Visual Studio Code', 'visual studio code': 'Visual Studio Code', discord: 'Discord', zoom: 'zoom.us',
 };
 const BLOCKED = /\b(send|submit|post|buy|pay|order|delete|remove|passwords?|cards?|codes?)\b/i;
+const ON_SCREEN = /\b(this|that|these|those|here|it|its|screen|page|tab|window|click|button|link|file|folder|app|document|my|mine|open)\b/i;
+const QUESTION = /^(?:what|who|when|where|which|why|how|weather|news|define|meaning of|translate|convert)\b.{3,}$/i;
 const action = (name, args, summary) => ({ actions: [{ name, args }], summary });
 const urlAction = (url, summary = 'Opened the requested page.') => action('open_url', { url }, summary);
 const keyAction = (name) => action('key', { name }, 'Keyboard shortcut completed.');
@@ -65,6 +67,13 @@ function single(raw) {
   if ((match = command.match(/^scroll (down|up)$/i)))
     return action('scroll', { dy: match[1].toLowerCase() === 'down' ? -500 : 500 }, 'Scrolled the page.');
   if ((match = text.match(/^type\s+([\s\S]+)$/i))) return action('type', { text: match[1] }, 'Typed the requested text.');
+  // A plain question or "show me" request that says nothing about what is on the screen is a web search.
+  if (!ON_SCREEN.test(command)) {
+    if ((match = command.match(/^(?:show me|find me|find)\s+(.+)$/i)))
+      return urlAction(`https://www.google.com/search?q=${encodeURIComponent(match[1])}`, 'Searched the web for that.');
+    if (QUESTION.test(command))
+      return urlAction(`https://www.google.com/search?q=${encodeURIComponent(command)}`, 'Searched the web for that.');
+  }
   return directUrl(command);
 }
 

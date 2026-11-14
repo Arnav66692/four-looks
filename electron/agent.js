@@ -246,7 +246,7 @@ export function createAgent({ mouse, typeText, screenshot, ask, openUrl, openApp
         messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: calls });
         let clicked = false, ended, failed;
         needsScreenshot = false;
-        const ran = [];
+        const ran = [], ranNames = [];
         for (let index = 0; index < calls.length; index++) {
           const call = calls[index];
           let outcome;
@@ -259,6 +259,7 @@ export function createAgent({ mouse, typeText, screenshot, ask, openUrl, openApp
               const performed = await perform(name, args);
               if (performed.ran) {
                 ran.push(call.id);
+                ranNames.push(name);
                 clicked ||= name === 'click';
                 needsScreenshot ||= name !== 'ask_person' && name !== 'done';
               }
@@ -272,6 +273,11 @@ export function createAgent({ mouse, typeText, screenshot, ask, openUrl, openApp
         for (const entry of messages.slice(-calls.length)) entry.content += ` Ran calls: ${ran.join(', ') || 'none'}.`;
         if (failed) throw failed;
         if (ended) return ended;
+        // Opening a link or an app either works or throws. A batch of only those is finished:
+        // no second model call just to look at the result (measured at about a second each).
+        if (ranNames.length === calls.length && ranNames.every((name) => name === 'open_url' || name === 'open_app')) {
+          return result(true, 'Opened what you asked for.');
+        }
       }
       return result(false, 'Step limit reached before completion.', 'maxSteps reached');
     } catch (error) {

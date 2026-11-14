@@ -116,6 +116,7 @@ function blockUnmetered(model) {
   writeFileSync(USAGE_FILE, JSON.stringify(next));
 }
 
+const FAST_MODEL = 'grok-4.20-0309-non-reasoning';
 export async function chooseVisionModel(key) {
   const body = await request(key, '/models');
   const models = Array.isArray(body.data) ? body.data.filter((model) => model && typeof model.id === 'string') : [];
@@ -125,6 +126,9 @@ export async function chooseVisionModel(key) {
     if (!ids.includes(override)) throw new Error('XAI_VISION_MODEL is not available from /v1/models');
     return override;
   }
+  // Measured on Nov 14, 2026 with this agent's own request: grok-4.20-0309-non-reasoning answered in about
+  // 0.6 to 1.1 s and took a screenshot, against 2.8 s for grok-4.3, 5.6 s for grok-4.7 and 6.1 s for grok-build-0.1.
+  if (ids.includes(FAST_MODEL)) return FAST_MODEL;
   if (ids.includes('grok-4.7')) return 'grok-4.7';
   // Use capability metadata if offered. The compatible /models response may omit it.
   const advertised = models.find((model) => {

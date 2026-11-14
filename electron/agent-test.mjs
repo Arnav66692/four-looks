@@ -425,10 +425,17 @@ await check('only requested delays are used for glide, input and screenshot sett
     assert.ok(delays.at(-1) > 250 && delays.at(-1) <= 350);
     for (const message of [call('open_url', { url: 'https://example.com' }), call('open_app', { name: 'Notes' })]) {
       delays.length = 0;
+      // Opening a link or an app alone finishes the run: no settle wait and no second model call.
       const opened = fixture([message, call('done', { summary: 'Opened' })]);
-      assert.equal((await opened.agent.run('Navigate')).ok, true);
-      assert.equal(delays.length, 1);
-      assert.ok(delays[0] > 250 && delays[0] <= 350);
+      const result = await opened.agent.run('Navigate');
+      assert.equal(result.ok, true);
+      assert.equal(result.modelCalls, 1);
+      assert.deepEqual(delays, []);
+      // With a key press after it the run goes on, and the next screenshot waits for the page to settle.
+      delays.length = 0;
+      const more = fixture([batch(message.tool_calls[0] && message, call('key', { name: 'tab' })), call('done', { summary: 'Opened' })]);
+      assert.equal((await more.agent.run('Navigate')).ok, true);
+      assert.ok(delays.some((ms) => ms > 150 && ms <= 350));
     }
     delays.length = 0;
     const immediate = fixture([batch(call('open_url', { url: 'https://example.com' }), call('done', { summary: 'Opened' }))]);
@@ -618,6 +625,22 @@ try {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
 }
+
+await check('questions and show-me requests take the search fast path, screen questions do not', async () => {
+  assert.equal(route('show me the weather forecast for San Diego').actions[0].args.url, 'https://www.google.com/search?q=the%20weather%20forecast%20for%20San%20Diego');
+  assert.match(route('how tall is the Eiffel Tower?').actions[0].args.url, /^https:\/\/www\.google\.com\/search\?q=how%20tall/);
+  assert.equal(route('what is on my screen'), null);
+  assert.equal(route('find the blue button on this page'), null);
+  assert.equal(route('what is the code for this'), null);
+});
+
+await check('a batch of only open_url ends the run with one model call', async () => {
+  const f = fixture([call('open_url', { url: 'https://example.com/' })]);
+  const result = await f.agent.run('Take a look around the example site for a while');
+  assert.equal(result.ok, true);
+  assert.equal(result.modelCalls, 1);
+  assert.deepEqual(f.events, [['open_url', 'https://example.com/']]);
+});
 
 console.log(`${passes} passed, ${failures} failed`);
 process.exitCode = failures ? 1 : 0;
