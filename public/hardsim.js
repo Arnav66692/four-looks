@@ -45,14 +45,16 @@ export async function run(only = null) {
   }
   // Press a key the way a person does with hold to press: look at it, check it lit up, re-aim if not, wait.
   let lastKey = null;
-  async function holdPress(key, maxMs = 9000) {
+  // want: only this kind of event counts as the press (a late guess firing on the way must not end the wait).
+  async function holdPress(key, maxMs = 9000, want = null) {
     if (key === lastKey) { await sim.lookAt(sim.head.x, sim.head.y - 0.14, 150); await sleep(380); }   // a double letter: leave the key, come back
     lastKey = key;
     const n0 = fl.log.length, t0 = performance.now();
-    const gone = () => since(n0).length > 0;
+    const got = () => since(n0).find((e) => !want || e.type === want);
+    const gone = () => !!got();
     await sim.lookAtKey(key, 0.1, gone);
     while (performance.now() - t0 < maxMs) {
-      const ev = since(n0)[0];
+      const ev = got();
       if (ev) return ev;
       if (hovered() !== keyEl(key)) await sim.lookAtKey(key, 0.05, gone); else await sleep(100);
     }
@@ -281,7 +283,7 @@ export async function run(only = null) {
       await sleep(3800);                                           // stay put on the bold guess
       const picks = since(n0, ["pick"]).length, words = fl.typer.text().trim().split(/\s+/).length;
       const n1 = fl.log.length;
-      await holdPress("undo", 12000);
+      await holdPress("undo", 12000, "undo");
       await sleep(3600);                                           // stay put on undo
       const undos = since(n1, ["undo"]).length;
       await reset();

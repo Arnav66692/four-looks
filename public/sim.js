@@ -11,12 +11,12 @@ const LAG_MS = Number(Q.get("lag") || 0);          // camera pipeline delay to s
 const delayed = [];
 const SPIKE = Number(Q.get("spike") || 0);         // chance per frame of a single-frame jump of 5 times the tremor
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// A person corrects an aim, then waits to SEE the cursor answer before correcting again. With a camera
-// delay the cursor answers late, so the wait is the delay plus a moment to notice. Correcting faster than
-// the delay (as this used to, every 133 ms against a 150 ms delay) made the simulated head swing back and
-// forth past the key, wider each time: in the 11:19 PM tremor run it swung 290 px around the E key.
-const SEE_MS = Math.max(HZ * 4, LAG_MS + 100);
-const AIM_OK = 0.3;       // close enough: the cursor is inside the middle 60% of the key
+// A correction takes a moment to show on screen: the camera delay plus a little smoothing. A person knows
+// they have already moved and does not correct the same error twice while waiting to see it. Without
+// this the simulated head corrected every 133 ms against a 150 ms delay, piled corrections on top of each
+// other and swung past the key, wider each time (290 px around the E key in the 11:19 PM tremor run).
+const SEE_MS = LAG_MS + 100;
+const AIM_OK = 0.2;       // close enough: the cursor is inside the middle 40% of the key
 const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(2 * Math.PI * Math.random());
 
 const SCORES = {
@@ -103,16 +103,21 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     const r = el.getBoundingClientRect();
     const tx = (r.left + r.width / 2 + miss * r.width * gauss()) / innerWidth, ty = (r.top + r.height / 2 + miss * r.height * gauss()) / innerHeight;
     await lookAt(tx, ty);
+    const sent = [];                 // corrections made but not yet visible: how far each will move the cursor
     for (let i = 0; i < 40; i++) {
       const c = window.fourLooks.cursor && window.fourLooks.cursor();
       if (!c || (done && done())) break;
-      const ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
+      let ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
       if (Math.abs(ex) * innerWidth < r.width * AIM_OK && Math.abs(ey) * innerHeight < r.height * AIM_OK) break;
+      const now = performance.now();
+      while (sent.length && sent[0].until <= now) sent.shift();
+      for (const m of sent) { ex -= m.dx; ey -= m.dy; }                    // already on its way to the screen
       if (LAZY && document.querySelector(".hover") === el) break;        // most people stop as soon as the key lights up
       const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1;   // people adapt to how far the cursor travels
       // People correct an aim in one or two quick moves, not by creeping: most of the error at once.
       head.x += (0.6 * ex) / g; head.y += (0.6 * ey) / g;
-      await sleep(SEE_MS);
+      sent.push({ until: now + SEE_MS, dx: 0.6 * ex, dy: 0.6 * ey });
+      await sleep(HZ * 4);
     }
     await sleep(260);
   }
