@@ -1085,7 +1085,8 @@ window.fourLooks.grokGoal = async (goal, autoAnswer = null) => {
 // ---------- nod: a quick, clear dip and return of the head accepts the grey guess ----------
 // Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
 // two never counts: a nod has to dip at least NOD_AMP of that range and be back within NOD_MS.
-const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, peakAt: 0, pressed: false, last: 0 };
+const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, peakAt: 0, pressed: false, last: 0, moved: 0 };
+const NOD_SETTLE_MS = 250;             // after a real head move, the head rests this long before a nod can begin
 const NOD_DOWN_MS = 500;               // the way down takes no longer than this: slower is moving to a lower key
 let nodCount = 0;                      // nods recognised this session, for the test suite
 window.fourLooks.nods = () => nodCount;
@@ -1096,7 +1097,13 @@ function detectNod(f) {
   if (nod.rest == null) { nod.rest = y; nod.restX = x; return; }
   const dy = y - nod.rest;
   if (nod.state === "rest") {
-    if (dy > NOD_START && f.t - nod.last > 400) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; nod.peakAt = f.t; nod.pressed = false; }
+    // Straight after a real move the head is still travelling. Follow it until it comes to rest, and only
+    // then listen for a nod. Without this the resting level was set in mid-air: on a diagonal trip from
+    // the top row to the space bar, the last part of the way down and the small bounce back at the end
+    // read as a nod and took the grey word ("see" became "Seems" in the 1:00 AM tremor run).
+    const travelling = f.t - nod.moved < NOD_SETTLE_MS;
+    if (travelling && Math.abs(dy) > NOD_START) { nod.rest = y; nod.restX = x; nod.moved = f.t; }
+    else if (!travelling && dy > NOD_START && f.t - nod.last > 400) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; nod.peakAt = f.t; nod.pressed = false; }
     else { nod.rest += 0.15 * (y - nod.rest); nod.restX += 0.15 * (x - nod.restX); }
     return;
   }
@@ -1104,7 +1111,7 @@ function detectNod(f) {
   // A nod may wander sideways by half its own depth, and never less than 0.12 of the range: his head
   // wobbles about 0.07 of the range side to side at rest, which used to cancel a nod as it began.
   const sideways = Math.abs(x - nod.restX) > Math.max(0.5 * nod.peak, 0.12);
-  if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; return; }   // a real move
+  if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; nod.moved = f.t; return; }   // a real move
   if (nod.peak >= NOD_AMP && dy < 0.3 * nod.peak) {
     nod.state = "rest"; nod.last = f.t;
     // Down, and straight back up, with no key pressed on the way: that is a nod. A slow way down, or a key
