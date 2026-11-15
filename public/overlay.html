@@ -38,7 +38,7 @@
     clearTimeout(hideTimer);
     if (ev.type === "end") { say.textContent = ev.text || ""; g.classList.remove("think"); hideTimer = setTimeout(() => g.classList.remove("on"), 2200); return; }
     g.classList.add("on");
-    if (ev.type === "confirm") { say.textContent = `${ev.text}  Nod for yes, shake for no.`; g.classList.remove("think"); return; }
+    if (ev.type === "confirm") { say.textContent = `${ev.text}  Nod or your press move for yes, shake for no.`; g.classList.remove("think"); return; }
     if (ev.type !== "step") return;
     g.classList.toggle("think", ev.action === "thinking");
     // Screen points to this window: the window may not start at the very top-left of the display.

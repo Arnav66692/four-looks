@@ -15,12 +15,12 @@ const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(2
 
 const SCORES = {
   smile: ["mouthSmileLeft", "mouthSmileRight"], blink: ["eyeBlinkLeft", "eyeBlinkRight"],
-  mouth: ["jawOpen"], pucker: ["mouthPucker"], brows: ["browInnerUp"],
+  mouth: ["jawOpen"], pucker: ["mouthPucker"], brows: ["browInnerUp"], frown: ["browDownLeft", "browDownRight"],
 };
 
 export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   const head = { x: 0.5, y: 0.5 };          // where the face points, in screen units
-  const level = { smile: 0, blink: 0, mouth: 0, pucker: 0, brows: 0 };
+  const level = { smile: 0, blink: 0, mouth: 0, pucker: 0, brows: 0, frown: 0 };
   let dip = 0;                              // extra downward pitch, for nods
   let auto = true;                          // follow calibration prompts like a person
   const DRIFT = Number(new URLSearchParams(location.search).get("drift") || 0);   // posture drift, radians per minute
@@ -72,6 +72,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       const typeIt = !big && text.match(/Type: (.+)$/);
       if (typeIt) { steering = true; type(typeIt[1] + " ").finally(() => { steering = false; }); }
       if (!big) return;
+      if (/Lower your eyebrows/.test(text)) { cue("frown", 2300, 0.7); return; }      // the frown lesson
       if (/ now\.$/.test(text) && !/normally|relax/i.test(text)) cue(cueName(), 520);
       if (/talk a little|look around|blink normally/i.test(text)) chatter();
     }

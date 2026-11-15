@@ -508,12 +508,8 @@ body.grokmode #dock [data-key="grokmode"] { display: none; }
 
 /* resting past the keyboard: the cursor fades, nothing is selected */
 #cursor.away { opacity: .28; }
-/* three blinks seen: the eye asks for a nod */
-body.grokoffer #grokbtn { color: var(--accent); animation: grok-ask 700ms var(--out) infinite alternate; }
-@keyframes grok-ask { from { transform: scale(1); } to { transform: scale(1.22); } }
 /* Grok is listening: say so inside the text box, where the eyes are */
 body.grokcmd #textbox::after { content: "GROK"; position: absolute; left: 14px; top: 8px; padding: 2px 8px; border-radius: 6px; background: var(--accent); color: var(--bg);
   font-size: 11px; font-weight: 600; letter-spacing: .12em; }
 body.grokcmd #textbox { position: relative; padding-top: 30px; }
 body.grokcmd #textbox.empty::before { content: "Tell Grok what to do."; }
-@media (prefers-reduced-motion: reduce) { body.grokoffer #grokbtn { animation: none; } }

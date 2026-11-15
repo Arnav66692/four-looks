@@ -277,7 +277,7 @@ function keepFix(how) {
 function acceptGhost(how) {
   if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
   if (how === "nod" && grok.busy) { answerGrok(true); return true; }
-  if (how === "nod" && takeGrokOffer()) return true;       // while Grok works, a nod only ever means yes
+       // while Grok works, a nod only ever means yes
   if (how === "nod" && mode === "mouse") return true;        // a nod moves the cursor, so it does not click: the mouth does
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
@@ -777,7 +777,7 @@ function stopGrok(why) {
 out?.onAgent?.((ev) => {
   if (!grok.busy) return;
   if (ev.type === "confirm") {
-    grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod = yes. Shake = no.`);
+    grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod or ${CUES[cueCfg.cue].name} = yes. Shake = no.`);
     if (grokAuto != null) setTimeout(() => answerGrok(grokAuto), 400);      // self-test only: no face to nod
   }
   else if (ev.type === "step") {
@@ -785,60 +785,113 @@ out?.onAgent?.((ev) => {
     if (ev.action !== "thinking") record("grok-step", { action: ev.action, reason: String(ev.reason || "").slice(0, 120) });
   }
 });
-// Three quick blinks (or the eye icon) make Grok listen. The text box becomes the command line and the
-// send key becomes "do it". Nothing typed here goes to the app in front. Three blinks again cancels.
+// A held frown (or the eye icon) makes Grok listen. The text box becomes the command line and the
+// send key becomes "do it". Nothing typed here goes to the app in front. The same frown again cancels.
 const QUICK = ["open gmail", "help", "search for", "mouse mode", "calibrate"];      // shown bold first, then outward
 let grokMode = false, grokStash = "", grokFrom = "keyboard";
-// A deliberate blink is a clear, short, full close of both eyes. In his 2:55 PM run Grok woke 0.7 s after the
-// camera started: a plain "eyelids past halfway" test also fires on tracking start-up and on looking down at
-// the lower keys, where the lids sit half closed. So the blink is measured against the resting lid level.
-const BLINK_RISE = 0.3;                // a blink closes at least this far past the resting lid level
-const BLINK_FLOOR = 0.45;              // and at least this far in absolute terms (his own blinks crossed 0.5 in the 2:55 PM run)
-const BLINK_MIN_MS = 60, BLINK_MAX_MS = 400;   // shorter is noise, longer is closing your eyes (that recentres)
-const BLINK_SPAN_MS = 1500;            // three blinks inside this long
-const BLINK_WARMUP_MS = 4000;          // nothing counts until the face has been tracked this long
-const blink3 = { base: 0.1, down: null, times: [], faceSince: null };
-function showBlinks(n) { [...document.querySelectorAll("#grokbtn .blinks i")].forEach((el, i) => el.classList.toggle("on", i < n)); }
-function detectTripleBlink(f) {
-  if (blink3.faceSince == null) blink3.faceSince = f.t;
-  const v = ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2;
-  if (blink3.times.length && f.t - blink3.times[blink3.times.length - 1] > BLINK_SPAN_MS) { blink3.times = []; showBlinks(0); }
-  if (blink3.down == null) {
-    if (v > Math.max(BLINK_FLOOR, blink3.base + BLINK_RISE)) blink3.down = f.t;
-    else blink3.base += 0.04 * (v - blink3.base);          // the resting lid level follows slowly, so looking down does not count
-    return;
+// Grok wakes on a deliberate lowering of the eyebrows (a frown), held for a moment. Blinks and nods came
+// first and both failed him: blink bursts woke it by accident, and his own blinks and nods were not always
+// seen. Nothing is assumed about his face: a four second lesson measures his resting brow level and his
+// deliberate frown, and until that lesson succeeds the frown does nothing (the eye icon and the Grok tile
+// still work). A wake needs, in order: a relaxed face, then a rise most of the way to his own frown, kept
+// there for the hold. A face that was already frowning when tracking began, came back, or finished
+// calibrating cannot wake it. The three dots under the eye fill while the hold builds.
+const FROWN_KEY = "fourlooks.frown.v1";
+const FROWN_START = 0.6;               // a frown begins this far from his resting level toward his taught frown
+const FROWN_KEEP = 0.35;               // and the face counts as relaxed again below this
+const FROWN_HOLD_MS = 450;             // held this long to wake Grok
+const FROWN_CANCEL_MS = 1000;          // and this long to cancel or stop it, so a frown of concentration while typing a command does not throw it away
+const FROWN_GAP_MS = 80;               // the hold must stay above the start level: dips shorter than this are forgiven
+const FROWN_ARM_MS = 300;              // relaxed this long before a frown can begin
+const FROWN_WARMUP_MS = 4000;          // nothing counts until the face has been tracked this long
+const FROWN_DRIFT = 0.1;               // the resting level may drift this far from the taught one, no further
+const FROWN_QUIET_MS = 300;            // closing the eyes pulls the brows down: ignored during and just after
+let frownCfg = (() => { try { const v = JSON.parse(localStorage.getItem(FROWN_KEY)); return v && typeof v.rest === "number" ? v : null; } catch { return null; } })();
+const frown = { base: frownCfg ? frownCfg.rest : 0.1, since: null, lastHigh: 0, fired: false, armed: false, relaxedSince: null, faceSince: null, lostAt: null, quietUntil: 0, level: 0 };
+let dotsTimer = 0;
+const browDown = (f) => ((f.scores.browDownLeft || 0) + (f.scores.browDownRight || 0)) / 2;
+function showDots(n) { [...document.querySelectorAll("#grokbtn .blinks i")].forEach((el, i) => el.classList.toggle("on", i < n)); }
+function frownLevels() {
+  const span = Math.max(0.12, frownCfg.firm - frownCfg.rest);
+  const drift = Math.max(-FROWN_DRIFT, Math.min(FROWN_DRIFT, frown.base - frownCfg.rest));
+  return { high: frownCfg.rest + drift + FROWN_START * span, low: frownCfg.rest + drift + FROWN_KEEP * span };
+}
+// Forget any frown in progress. The face has to be seen relaxed again before the next one can begin.
+function frownReset() {
+  if (frown.since != null) { clearTimeout(dotsTimer); showDots(0); }
+  frown.since = null; frown.fired = false; frown.armed = false; frown.relaxedSince = null;
+}
+function detectFrown(f, shut) {
+  if (frown.faceSince == null) frown.faceSince = f.t;
+  frown.lostAt = null;
+  const v = (frown.level = browDown(f));
+  if (!frownCfg || !frownCfg.ok) return;                          // not taught yet, or his frown could not be seen
+  if (shut) frown.quietUntil = f.t + FROWN_QUIET_MS;
+  if (f.t < frown.quietUntil || f.t - frown.faceSince < FROWN_WARMUP_MS) { frownReset(); return; }
+  const { high, low } = frownLevels();
+  if (frown.since == null) {
+    if (v < high) frown.base += 0.02 * (v - frown.base);         // the resting level follows slowly, within FROWN_DRIFT
+    if (v < low) {
+      if (frown.relaxedSince == null) frown.relaxedSince = f.t;
+      if (f.t - frown.relaxedSince >= FROWN_ARM_MS) { frown.armed = true; frown.fired = false; }
+    } else frown.relaxedSince = null;
+    if (!frown.armed || v <= high) return;
+    frown.since = f.t; frown.lastHigh = f.t;
+    clearTimeout(dotsTimer);
   }
-  if (v > blink3.base + 0.15) { if (f.t - blink3.down > BLINK_MAX_MS) { blink3.times = []; showBlinks(0); } return; }   // still closed
-  const len = f.t - blink3.down; blink3.down = null;
-  if (len < BLINK_MIN_MS || len > BLINK_MAX_MS || f.t - blink3.faceSince < BLINK_WARMUP_MS) { blink3.times = []; showBlinks(0); return; }
-  blink3.times = [...blink3.times.filter((t) => f.t - t < BLINK_SPAN_MS), f.t];
-  showBlinks(blink3.times.length);
-  if (blink3.times.length >= 3) { blink3.times = []; setTimeout(() => showBlinks(0), 400); offerGrok(); }
-}
-// Three blinks alone never switch modes: people blink in bursts. In his 3:12 PM run Grok mode came on
-// without him meaning it, and two and a half minutes of typing never reached Gmail. Now three blinks only
-// ask, and a nod within a few seconds says yes. Three blinks while Grok listens cancel it straight away.
-const OFFER_MS = 4000;
-let grokOffer = 0;
-function offerGrok() {
-  if (grok.busy) { stopGrok("three blinks"); return; }
-  if (grokMode) { toggleGrokMode("three blinks"); return; }
+  if (v > high) frown.lastHigh = f.t;
+  if (v < low || f.t - frown.lastHigh > FROWN_GAP_MS) { frownReset(); return; }      // relaxed, or sagged below the start level
+  if (frown.fired) return;                                        // one action per frown: relax before the next one counts
+  const need = grokMode || grok.busy ? FROWN_CANCEL_MS : FROWN_HOLD_MS;
+  const held = f.t - frown.since;
+  showDots(Math.min(3, 1 + Math.floor((3 * held) / need)));
+  if (held < need) return;
+  frown.fired = true;
+  dotsTimer = setTimeout(() => showDots(0), 500);
+  if (grok.busy) { stopGrok("frown"); return; }
   if (calibrating || !typer) return;
-  grokOffer = performance.now();
-  tick();
-  document.body.classList.add("grokoffer");
-  prompt("Three blinks seen. Nod to wake Grok.", false, true);
-  record("grok-offer", {});
-  setTimeout(() => { if (grokOffer && performance.now() - grokOffer >= OFFER_MS - 50) { grokOffer = 0; document.body.classList.remove("grokoffer"); prompt("Typing as normal."); } }, OFFER_MS);
+  toggleGrokMode("frown");
 }
-function takeGrokOffer() {
-  if (!grokOffer || performance.now() - grokOffer > OFFER_MS) return false;
-  grokOffer = 0;
-  document.body.classList.remove("grokoffer");
-  enterGrokMode("three blinks and a nod");
-  return true;
+// The lesson: two seconds relaxed, two seconds frowning. Sets where a frown starts for this face.
+let frownAsked = false;
+async function teachFrown() {
+  if (!lastFrame || calibrating || grok.busy) return;
+  frownAsked = true;
+  if (grokMode) exitGrokMode();
+  toggleMenu(false);
+  calibrating = true;
+  $("cursor").style.display = "none";
+  const collect = async (ms) => {
+    const xs = [];
+    const w = (f) => { if (f.face) xs.push(browDown(f)); };
+    watchers.add(w); await sleep(ms); watchers.delete(w);
+    return xs.sort((x, y) => x - y);
+  };
+  prompt("Teaching Grok your frown. First relax your face.", true);
+  await sleep(700);
+  const rest = await collect(1500);
+  prompt("Lower your eyebrows and hold now.", true);
+  await sleep(600);
+  const firm = await collect(2000);
+  const r = rest.length ? rest[Math.floor(rest.length * 0.5)] : null, fm = firm.length ? firm[Math.floor(firm.length * 0.7)] : null;
+  const ok = r != null && fm != null && fm - r >= 0.12;
+  frownCfg = { rest: +(r ?? 0.1).toFixed(3), firm: +(fm ?? 0.1).toFixed(3), ok };
+  store(FROWN_KEY, frownCfg);
+  record("frown-teach", frownCfg);
+  frown.base = frownCfg.rest;
+  frownReset();
+  calibrating = false;
+  refreshMenu();
+  prompt(ok ? "Got it. Lower your eyebrows and hold half a second to wake Grok."
+    : "I could not see your frown clearly. Use the eye icon or the Grok tile in the dots menu, or choose Teach frown to try again.");
 }
-window.fourLooks.grokOffer = () => !!grokOffer;
+setInterval(() => {           // the first time the app is ready and no frown has been taught, teach it
+  if (frownCfg || frownAsked || !usingCamera || !lastFrame?.face || !pointer.ready || calibrating || study.capture || params.get("study") || mode !== "keyboard" || grokMode || grok.busy || !typer) return;
+  teachFrown();
+}, 1500);
+window.fourLooks.frown = () => ({ level: +frown.level.toFixed(2), taught: !!frownCfg?.ok, rest: frownCfg?.rest ?? null, firm: frownCfg?.firm ?? null, ...(frownCfg?.ok ? Object.fromEntries(Object.entries(frownLevels()).map(([k, x]) => [k, +x.toFixed(2)])) : {}), armed: frown.armed });
+window.fourLooks.frownReset = frownReset;
+window.fourLooks.exitGrok = () => { if (grokMode) exitGrokMode(); };
 async function enterGrokMode(why) {
   if (grokMode || grok.busy || calibrating || !typer) return;
   grokFrom = mode;
@@ -849,7 +902,7 @@ async function enterGrokMode(why) {
   document.body.classList.add("grokcmd");
   record("grok-mode", { on: true, why });
   tick();
-  prompt("GROK IS LISTENING. This is not typed into your app. Type what you want done, press do it. Three blinks to cancel.", false, true);
+  prompt("GROK IS LISTENING. This is not typed into your app. Type what you want done, press do it. Hold a frown one second to cancel.", false, true);
   updateKeys(); renderText(); updatePrior();
 }
 function exitGrokMode() {
@@ -875,6 +928,7 @@ window.fourLooks.hold = () => ({ key: holdEl?.dataset.key || null, p: +holdP.toF
 const APP_COMMANDS = [
   [/^(help|guide|what can (you|i) do)$/i, () => toggleHelp(true)],
   [/^(re)?calibrate$/i, () => calibrate()],
+  [/^(teach|learn) (my )?frown$/i, () => teachFrown()],
   [/^(mouse|mouse mode|use the mouse)$/i, () => setMode("mouse")],
   [/^(boxes|box|box keys|big keys)$/i, () => setLayout("big")],
   [/^(qwerty|normal keyboard)$/i, () => setLayout("abc")],
@@ -929,7 +983,7 @@ async function runGrok() {
   return r;
 }
 window.fourLooks.runGrok = runGrok;
-// The desktop app's self-test runs a goal through the very same path as three blinks and "do it":
+// The desktop app's self-test runs a goal through the very same path as the frown and "do it":
 // Grok mode, the command line, the dock, the agent, and back. autoAnswer stands in for the nod.
 let grokAuto = null;
 window.fourLooks.grokGoal = async (goal, autoAnswer = null) => {
@@ -1012,8 +1066,14 @@ function onFrame(f) {
   $("cuebar").style.setProperty("--c", String(c));
   if (adminOn && admin) drawAdmin(f, c);
   const shut = f.face && ((f.scores.eyeBlinkLeft || 0) + (f.scores.eyeBlinkRight || 0)) / 2 > 0.5;
-  if (f.face && !calibrating && !study.capture) detectTripleBlink(f);
-  else { blink3.down = null; blink3.times = []; if (!f.face) blink3.faceSince = null; }
+  if (f.face && !calibrating && !study.capture) detectFrown(f, shut);
+  else {
+    frownReset();                                     // anything in progress is dropped, and the face must be seen relaxed again
+    if (!f.face) {                                    // a brief dropout keeps the warm-up, a real absence restarts it
+      if (frown.lostAt == null) frown.lostAt = f.t;
+      else if (f.t - frown.lostAt > 2000) frown.faceSince = null;
+    }
+  }
   if (shut && !calibrating) {
     if (eyesShutSince == null) { eyesShutSince = f.t; recentered = false; }
     else if (f.t - eyesShutSince > 3000) { eyesShutSince = null; toggleMenu(false); calibrate(); return; }
@@ -1038,14 +1098,18 @@ function onFrame(f) {
   detectFlick(f);
   if (f.t - lastTrace > 100) {                 // a light trace of every session: where the cursor is, where the head points, what is selected
     lastTrace = f.t;
-    record("p", { x: Math.round(cursorAt?.[0] ?? -1), y: Math.round(cursorAt?.[1] ?? -1), yaw: +f.pose[0].toFixed(4), pitch: +f.pose[1].toFixed(4), on: hoverEl ? (hoverEl.dataset.word ? "chip" : hoverEl.dataset.key) : "", c: +c.toFixed(2) });
+    record("p", { x: Math.round(cursorAt?.[0] ?? -1), y: Math.round(cursorAt?.[1] ?? -1), yaw: +f.pose[0].toFixed(4), pitch: +f.pose[1].toFixed(4), on: hoverEl ? (hoverEl.dataset.word ? "chip" : hoverEl.dataset.key) : "", c: +c.toFixed(2), b: +browDown(f).toFixed(2) });
   }
   study.watchers.forEach((w) => w(f, { cursor: cursorAt, score: c }));
   if (cueCfg.calibrated && c > cueCfg.thr) {
     if (blinkSince == null) blinkSince = f.t;
     const target = intended(blinkSince);       // where you were when the press move started
     if (!blinkFired && f.t - blinkSince > cueCfg.ms && study.capture) { blinkFired = true; study.onPress?.(performance.now()); }
-    if (!blinkFired && f.t - blinkSince > cueCfg.ms && mode === "mouse") { blinkFired = true; if (!grok.busy) clickAtRest("press move"); }
+    if (!blinkFired && f.t - blinkSince > cueCfg.ms && mode === "mouse") {
+      blinkFired = true;
+      if (grok.busy) { if (grok.confirm != null) answerGrok(true); }      // his nod is not always seen: the press move also says yes
+      else clickAtRest("press move");
+    }
     if (!blinkFired && f.t - blinkSince > cueCfg.ms + pressExtra && target) {
       blinkFired = true;
       // For studying drift on a real face: where the head was in the camera frame at this press.
@@ -1309,7 +1373,7 @@ const HELP_HTML = `<div class="help">
     <li>Fix asks Grok to check the sentence.</li>
   </ul></section>
   <section><h3>Grok</h3><ul>
-    <li>Blink three times. The eye lights up.</li>
+    <li>Lower your eyebrows and hold half a second. The eye lights up.</li>
     <li>Type what you want, or pick one on top.</li>
     <li>Press do it. Try: open gmail.</li>
     <li>Nod is yes. Shake is no, or stop.</li>
@@ -1333,7 +1397,8 @@ function toggleHelp(open = !helpOpen) {
 }
 const SETTINGS = [
   { id: "help", label: "Help", value: () => "how it all works", run: () => toggleHelp(true) },
-  { id: "grok", label: "Grok", value: () => "or blink three times", run: () => { toggleMenu(false); enterGrokMode("menu"); } },
+  { id: "frown", label: "Teach frown", value: () => (frownCfg?.ok ? "wakes Grok" : frownCfg ? "not seen, try again" : "not taught"), run: () => { toggleMenu(false); teachFrown(); } },
+  { id: "grok", label: "Grok", value: () => "or frown and hold", run: () => { toggleMenu(false); enterGrokMode("menu"); } },
   { id: "mouse", label: "Mouse mode", value: () => "head moves the cursor", run: () => { toggleMenu(false); setMode("mouse"); } },
   { id: "theme", label: "Theme", value: () => theme, run: () => { theme = cycle(THEMES, theme); store("fourlooks.theme.v1", theme); applyTheme(); } },
   { id: "cue", label: "Press with", value: () => CUES[cueCfg.cue].name, run: () => {

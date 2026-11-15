@@ -28,7 +28,9 @@ export async function run(only = null) {
   async function setLayout(name) { for (let i = 0; i < 3 && tile("layout") !== name; i++) fl.setting("layout"); await sleep(150); }
   async function reset({ hold = true } = {}) {
     if (document.body.classList.contains("menu-open")) fl.setting("close");
-    if (fl.grokMode()) { for (let i = 0; i < 3; i++) await sim.cue("blink", 60); await sleep(400); }
+    if (fl.grokMode()) { fl.exitGrok(); await sleep(200); }       // closed directly, so a scenario never starts inside Grok mode
+    if (fl.grokMode()) throw new Error("Grok mode would not close before the scenario");
+    sim.level.frown = 0;
     await fl.setMode("keyboard");
     await sim.lookAt(0.5, -0.3, 200);            // look up at the app while things settle: selects nothing
     await sleep(700);
@@ -63,6 +65,10 @@ export async function run(only = null) {
     return { pressed, shown };
   }
   const blinks = async (n, ms = 60) => { for (let i = 0; i < n; i++) await sim.cue("blink", ms); };
+  const frownHold = (ms = 650, strength = 0.7) => sim.cue("frown", ms, strength);      // a deliberate lowering of the brows
+  // The app teaches itself this face's frown on first run (the simulated face follows the prompts). Wait for it.
+  for (let i = 0; i < 80 && !fl.frown().taught; i++) await sleep(300);
+  out.frownTaught = fl.frown();
   const soft = (c) => { const L = "abcdefghijklmnopqrstuvwxyz", p = new Array(26).fill(0.6 / 25); p[L.indexOf(c)] = 0.4; return p; };
 
   const scenarios = {
@@ -77,22 +83,46 @@ export async function run(only = null) {
       const got = since(n0);
       return { pass: got.length === 0, detail: { strayEvents: got.map((e) => e.type + (e.key ? ":" + e.key : "")), awayFlag: away } };
     },
-    // 2. Blink bursts never switch modes on their own. Three blinks and a nod do. Three more cancel.
-    async blinks_need_a_nod() {
+    // 2. Grok wakes on a deliberate held frown and on nothing else. Every false-wake case here is one a
+    //    reviewer or a real session raised: blink bursts, nods, quick frowns, frowning in concentration while
+    //    typing, a face that settles into a frown, and a frown already held when tracking resumes.
+    async frown_wakes_grok() {
       await reset();
       const n0 = fl.log.length;
-      for (let i = 0; i < 8; i++) { await blinks(1, 60 + 60 * Math.random()); await sleep(900 + 1500 * Math.random()); }
-      for (let i = 0; i < 3; i++) { await blinks(2); await sleep(2200); }
-      const quiet = !fl.grokMode() && since(n0, ["grok-mode", "grok-offer"]).length === 0;
-      await blinks(3); await sleep(300);
-      const offered = fl.grokOffer() && !fl.grokMode();
-      await sleep(4300);
-      const lapsed = !fl.grokOffer() && !fl.grokMode();
-      await blinks(3); await sleep(300); await sim.nod(); await sleep(500);
-      const woke = fl.grokMode();
-      await blinks(3); await sleep(500);
+      const calm = () => !fl.grokMode() && since(n0, ["grok-mode"]).length === 0;
+      for (let i = 0; i < 5; i++) { await blinks(1, 60 + 60 * Math.random()); await sleep(700 + 800 * Math.random()); }
+      await blinks(2); await sleep(1200); await blinks(3); await sleep(1200);
+      const blinking = calm();
+      await sim.nod(); await sleep(700); await sim.nod(); await sleep(700);
+      const nodding = calm();
+      for (let i = 0; i < 4; i++) { await sim.cue("frown", 120, 0.7); await sleep(600); }           // full strength, each too short
+      const quick = calm();
+      sim.level.frown = 0.3;                                                                          // about half his own frown, held through a typed word
+      await holdType("help ");
+      sim.level.frown = 0; await sleep(600);
+      const concentrating = calm();
+      for (let i = 0; i < 5; i++) { await sim.cue("frown", 400, 0.36); await sleep(500); }            // bursts just under his start level
+      const bursts = calm();
+      for (let k = 1; k <= 40; k++) { sim.level.frown = 0.011 * k; await sleep(150); }                // the face slowly settles into a real frown
+      await sleep(3000); sim.level.frown = 0; await sleep(1500);
+      const settling = calm();
+      sim.level.frown = 0.7; fl.frownReset();                                                         // already frowning when tracking resumes
+      await sleep(2200);
+      const heldAcrossReturn = calm();
+      sim.level.frown = 0; await sleep(900);
+      fl.setting("clear");
+      await frownHold(); await sleep(500);
+      const woke = fl.grokMode(), banner = $("prompt").textContent;
+      await sleep(900);
+      await frownHold(650); await sleep(500);                                                         // a frown of concentration while composing
+      const survivesShortFrown = fl.grokMode();
+      await sleep(600);
+      await frownHold(1300); await sleep(500);
       const cancelled = !fl.grokMode();
-      return { pass: quiet && offered && lapsed && woke && cancelled, detail: { singlesAndDoublesDoNothing: quiet, threeBlinksOnlyAsk: offered, askLapsesWithoutNod: lapsed, nodWakes: woke, threeBlinksCancel: cancelled } };
+      return {
+        pass: blinking && nodding && quick && concentrating && bursts && settling && heldAcrossReturn && woke && /GROK IS LISTENING/.test(banner) && survivesShortFrown && cancelled,
+        detail: { blinkBurstsDoNothing: blinking, nodsDoNothing: nodding, quickFrownsDoNothing: quick, frowningWhileTypingDoesNothing: concentrating, burstsUnderHisLevelDoNothing: bursts, slowSettleIntoFrownDoesNothing: settling, frownHeldWhenTrackingResumesDoesNothing: heldAcrossReturn, heldFrownWakes: woke, shortFrownInGrokModeKeepsIt: survivesShortFrown, oneSecondFrownCancels: cancelled, frownState: fl.frown() },
+      };
     },
     // 3. A paragraph by hold to press, with tremor, camera delay and spike frames.
     async paragraph_by_hold() {
@@ -146,7 +176,7 @@ export async function run(only = null) {
       await sleep(300);
       const before = fl.app.text;
       await sim.lookAt(0.5, -0.3, 200);
-      await blinks(3); await sleep(300); await sim.nod(); await sleep(600);
+      await frownHold(); await sleep(600);
       const inMode = fl.grokMode(), label = keyEl("send")?.querySelector(".label")?.textContent, banner = $("prompt").textContent;
       await holdType("open gmail");
       await sleep(300);
