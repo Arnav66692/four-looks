@@ -49,9 +49,9 @@ const REARM_MS = 250;                                   // a pressed key can pre
 const HOLD_DRAIN = 1.6;                                 // a hold drains this many times slower than it builds
 const SWITCH_MS = 40;                                   // a new key takes the selection after the pointer has been in it this long
 let switchTo = null, switchSince = 0;
-const NOD_AMP = Number(params.get("nod") || 0.25);       // a nod dips at least this much of your calibrated up-down range (his recognised nods: median 0.57)
+const NOD_AMP = Number(params.get("nod") || 0.3);        // a nod dips at least this much of your calibrated up-down range (his recognised nods: median 0.57)
 const NOD_START = 0.07;                                 // a dip this big starts the nod clock
-const NOD_MS = 800;                                     // and the head is back within this long (was 550: his head dips take about a second end to end)
+const NOD_MS = 650;                                     // and the head is back within this long. 800 with a 0.25 dip read a quick move down to the space bar as a nod (you became your, help became helpful)
 const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
 const CHIP_SLOTS = 5;
 const CHIP_ORDER = [3, 1, 0, 2, 4];     // slot -> guess rank: the best guess sits in the middle of the row
@@ -400,13 +400,17 @@ function press(el, x, y, sure = false) {
     lastPress = [...group].map((c) => [c, 1 / group.length]);
     record("letter", { key: k });
   } else if (k.length === 1 && LETTERS.includes(k)) {
-    const probs = letterProbs(x, y);
+    // The letter typed is the key that lit up and was pressed. Where on the key the cursor sat only says how
+    // likely the neighbours are, for autocorrect. A press near a corner used to read as the key next to it
+    // (hold on E, get P), because the row below sits half a key across and its middle was closer.
+    const at = letterProbs(x, y), own = LETTERS.indexOf(k);
+    const probs = at[own] >= Math.max(...at) ? at : at.map((p, i) => 0.5 * p + (i === own ? 0.5 : 0));
     lastPress = probs.map((p, i) => [LETTERS[i], p]).sort((a, b) => b[1] - a[1]).slice(0, 3);
     typer.letter(probs);
     record("letter", { key: k });
   } else if (k === "space") { typer.literal(" "); record("space"); }
   else if (k === "⌫") { typer.backspace(); record("backspace"); }
-  else if (k === "shift") typer.toggleShift();
+  else if (k === "shift") { typer.toggleShift(); record("shift", { state: typer.shift }); }
   else if (k === "123" || k === "abc") { layer = k === "123" ? "sym" : letters; buildKeys(); }
   else if (k === "layout") { letters = LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]; layer = letters; store(LAYOUT_KEY, letters); record("layout", { letters }); buildKeys(); }
   else if (k === "speak") speak(false);
@@ -540,12 +544,17 @@ function lockShare(t) {
   return holdToPress ? (holdEl === hoverEl ? holdP : 0) : Math.min(1, (t - hoverSince) / DWELL);
 }
 const isLocked = (t) => lockShare(t) >= LOCK_AT;
+// A locked letter reaches past its edge so tremor cannot knock you off it. Shift, undo, send and the other
+// keys that change things never reach: in the 11:07 PM tremor run a locked shift held on while the cursor
+// sat in the middle of S, and the S came out as a capital. Pressing one of those by accident costs more
+// than aiming at it again.
+const reaches = (el, t) => isLocked(t) && !SLOW_KEYS.has(el?.dataset.key);
 function stillOn(el, x, y, t) {
   if (!el || !el.isConnected) return false;
   // Before the lock a key keeps only a hair past its edge, enough to stop flicker on the line between two keys.
   // His traces show the cursor bouncing between rows far more than along a row (up-down head movement is
   // small and noisy), so before the lock a key holds further against a slip to the row above or below.
-  const r = el.getBoundingClientRect(), locked = isLocked(t);
+  const r = el.getBoundingClientRect(), locked = reaches(el, t);
   const mx = locked ? STICKY_LOCKED * Math.min(r.width, r.height) : EDGE_HAIR * r.width;
   const my = locked ? STICKY_LOCKED * Math.min(r.width, r.height) : ROW_HAIR * r.height;
   return x > r.left - mx && x < r.right + mx && y > r.top - my && y < r.bottom + my;
@@ -575,7 +584,7 @@ function pickHover(x, y, t) {
   // the key holds through wobble past its edge and only a clear move deep into another key takes over.
   const zone = (el) => (el ? (el.closest("#chips") ? "chips" : el.closest("#keys") ? "keys" : "other") : null);
   if (top && hoverEl && zone(top) !== zone(hoverEl)) return top;      // the lock never reaches from a key into the suggestions, or back
-  if (stillOn(hoverEl, x, y, t) && !(isLocked(t) && top && top !== hoverEl && inCore(top, x, y))) return hoverEl;
+  if (stillOn(hoverEl, x, y, t) && !(reaches(hoverEl, t) && top && top !== hoverEl && inCore(top, x, y))) return hoverEl;
   return top;
 }
 function inCore(el, x, y) {
@@ -820,8 +829,8 @@ let grokMode = false, grokStash = "", grokFrom = "keyboard";
 // there for the hold. A face that was already frowning when tracking began, came back, or finished
 // calibrating cannot wake it. The three dots under the eye fill while the hold builds.
 const FROWN_KEY = "fourlooks.frown.v1";
-const FROWN_START = 0.6;               // a frown begins this far from his resting level toward his taught frown
-const FROWN_KEEP = 0.35;               // and the face counts as relaxed again below this
+const FROWN_START = 0.7;               // a frown begins this far from his resting level toward his taught frown (his brow score reached 0.22 while just typing, against about 0.35 in a frown)
+const FROWN_KEEP = 0.4;                // and the face counts as relaxed again below this
 const FROWN_HOLD_MS = 450;             // held this long to wake Grok
 const FROWN_CANCEL_MS = 1000;          // and this long to cancel or stop it, so a frown of concentration while typing a command does not throw it away
 const FROWN_GAP_MS = 80;               // the hold must stay above the start level: dips shorter than this are forgiven
@@ -906,21 +915,26 @@ async function teachFrown() {
     return xs;
   };
   const pct = (xs, q) => xs[Math.min(xs.length - 1, Math.floor(xs.length * q))];
-  // Relaxed, and looking around: the resting spread then includes what turning the head does to each signal.
-  prompt("Teaching Grok your frown. Relax your face and look around the keyboard.", true);
-  await sleep(700);
-  const rest = await collect(2500);
-  prompt("Lower your eyebrows and hold now.", true);
-  await sleep(600);
-  const firm = await collect(2000);
+  // Two clear steps with time to read each. In his first two lessons he frowned during the first step
+  // and relaxed in the second (the tracker read 0.35 and then 0.003), so the lesson failed although his
+  // frown is easy to see. The steps are now worded plainly, and the two are told apart by what the face
+  // did, not by which came first: whichever step had the stronger signal is taken as the frown.
+  prompt("Frown lesson, step 1 of 2. Keep your face relaxed. Do not frown yet.", true);
+  await sleep(1300);
+  const first = await collect(2500);
+  prompt("Step 2 of 2. Now lower your eyebrows and hold.", true);
+  await sleep(1100);
+  const second = await collect(2500);
   const tried = {};
   let best = null;
   for (const k of Object.keys(FROWN_SIGNALS)) {
-    if (rest[k].length < 15 || firm[k].length < 15) continue;
-    const r = pct(rest[k], 0.5), spread = pct(rest[k], 0.9) - pct(rest[k], 0.1), fm = pct(firm[k], 0.6);
+    if (first[k].length < 15 || second[k].length < 15) continue;
+    const swapped = pct(first[k], 0.5) > pct(second[k], 0.5);
+    const rest = swapped ? second[k] : first[k], firm = swapped ? first[k] : second[k];
+    const r = pct(rest, 0.5), spread = pct(rest, 0.9) - pct(rest, 0.1), fm = pct(firm, 0.6);
     const floor = k === "brow" ? 0.02 : 0.004;                    // the least spread ever assumed, so a very still face does not look infinitely separable
     const sep = (fm - r) / Math.max(spread, floor);
-    tried[k] = { rest: +r.toFixed(4), spread: +spread.toFixed(4), firm: +fm.toFixed(4), sep: +sep.toFixed(1) };
+    tried[k] = { rest: +r.toFixed(4), spread: +spread.toFixed(4), firm: +fm.toFixed(4), sep: +sep.toFixed(1), frownedFirst: swapped };
     if (sep >= FROWN_MIN_SEP && (!best || sep > best.sep)) best = { signal: k, rest: r, firm: fm, sep };
   }
   const ok = !!best;
@@ -1085,7 +1099,7 @@ function detectNod(f) {
   // wobbles about 0.07 of the range side to side at rest, which used to cancel a nod as it began.
   const sideways = Math.abs(x - nod.restX) > Math.max(0.5 * nod.peak, 0.12);
   if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; return; }   // a real move
-  if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) {
+  if (nod.peak >= NOD_AMP && dy < 0.3 * nod.peak) {
     nod.state = "rest"; nod.last = f.t;
     // Down, and straight back up, with no key pressed on the way: that is a nod. A slow way down, or a key
     // pressed at the bottom, was a trip to a lower row and takes no word.

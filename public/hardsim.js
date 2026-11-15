@@ -6,8 +6,8 @@
 // letter shown as its neighbour. A scenario passes only on its stated bar. No scenario speaks out loud,
 // calls a model, or touches anything outside the page.
 
-const INPUT = ["letter", "space", "backspace", "undo", "symbol", "pick", "ghost", "ghost-phrase", "send", "speak", "fix-check", "menu", "mode", "setting", "layout", "grok", "grok-mode", "grok-offer", "grok-local", "switch-app", "click", "recenter", "keep-typed", "help"];
-const CHANGES = ["undo", "send", "speak", "fix-check", "menu", "mode", "setting", "layout", "grok", "grok-mode", "grok-local", "switch-app", "click", "help", "backspace"];
+const INPUT = ["letter", "space", "shift", "backspace", "undo", "symbol", "pick", "ghost", "ghost-phrase", "send", "speak", "fix-check", "menu", "mode", "setting", "layout", "grok", "grok-mode", "grok-offer", "grok-local", "switch-app", "click", "recenter", "keep-typed", "help"];
+const CHANGES = ["shift", "undo", "send", "speak", "fix-check", "menu", "mode", "setting", "layout", "grok", "grok-mode", "grok-local", "switch-app", "click", "help", "backspace"];
 
 export async function run(only = null) {
   const fl = window.fourLooks, sim = fl.sim, sleep = sim.sleep;
@@ -15,7 +15,10 @@ export async function run(only = null) {
   const $ = (id) => document.getElementById(id);
   const since = (n, types = INPUT) => fl.log.slice(n).filter((e) => types.includes(e.type));
   const tile = (id) => document.querySelector(`[data-key="set:${id}"] .val`)?.textContent;
-  const keyEl = (key) => [...document.querySelectorAll("#keys [data-key], #chips [data-key]")].find((e) => e.dataset.key === key || e.dataset.word === key || (key.length === 1 && e.dataset.key.startsWith("g:") && e.dataset.key.slice(2).includes(key)));
+  const keyEl = (key) => {      // the keyboard's own key first: the letter o is the O key, not a guess that reads "o"
+    const keys = [...document.querySelectorAll("#keys [data-key]")], chips = [...document.querySelectorAll("#chips [data-key]")];
+    return keys.find((e) => e.dataset.key === key) || keys.find((e) => key.length === 1 && e.dataset.key.startsWith("g:") && e.dataset.key.slice(2).includes(key)) || chips.find((e) => e.dataset.word === key);
+  };
   const hovered = () => document.querySelector("#keys .hover, #chips .hover");
 
   // No model calls and no talking from a test.
@@ -46,11 +49,12 @@ export async function run(only = null) {
     if (key === lastKey) { await sim.lookAt(sim.head.x, sim.head.y - 0.14, 150); await sleep(380); }   // a double letter: leave the key, come back
     lastKey = key;
     const n0 = fl.log.length, t0 = performance.now();
-    await sim.lookAtKey(key, 0.1);
+    const gone = () => since(n0).length > 0;
+    await sim.lookAtKey(key, 0.1, gone);
     while (performance.now() - t0 < maxMs) {
       const ev = since(n0)[0];
       if (ev) return ev;
-      if (hovered() !== keyEl(key)) await sim.lookAtKey(key, 0.05); else await sleep(100);
+      if (hovered() !== keyEl(key)) await sim.lookAtKey(key, 0.05, gone); else await sleep(100);
     }
     return null;
   }

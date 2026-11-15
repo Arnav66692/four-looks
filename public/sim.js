@@ -72,7 +72,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       const typeIt = !big && text.match(/Type: (.+)$/);
       if (typeIt) { steering = true; type(typeIt[1] + " ").finally(() => { steering = false; }); }
       if (!big) return;
-      if (/Lower your eyebrows/.test(text)) { cue("frown", 2300, 0.7); return; }      // the frown lesson
+      if (/lower your eyebrows/i.test(text)) { cue("frown", 3200, 0.7); return; }      // the frown lesson, step 2
       if (/ now\.$/.test(text) && !/normally|relax/i.test(text)) cue(cueName(), 520);
       if (/talk a little|look around|blink normally/i.test(text)) chatter();
     }
@@ -90,7 +90,8 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     }
   }
   // Like a person: glance toward the key, then watch the cursor and steer until it sits on the key.
-  async function lookAtKey(key, miss = 0.12) {
+  // done: an optional check for "it has been pressed". A person stops adjusting the moment the key goes off.
+  async function lookAtKey(key, miss = 0.12, done = null) {
     const el = findKey(key);
     if (!el) throw new Error(`no key ${key}`);
     const r = el.getBoundingClientRect();
@@ -98,7 +99,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     await lookAt(tx, ty);
     for (let i = 0; i < 40; i++) {
       const c = window.fourLooks.cursor && window.fourLooks.cursor();
-      if (!c) break;
+      if (!c || (done && done())) break;
       const ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
       if (Math.abs(ex) * innerWidth < r.width * 0.2 && Math.abs(ey) * innerHeight < r.height * 0.2) break;
       if (LAZY && document.querySelector(".hover") === el) break;        // most people stop as soon as the key lights up
@@ -125,9 +126,10 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   async function rowHop() { const y0 = head.y; await lookAt(head.x, y0 + 0.17, 160); await lookAt(head.x, y0, 160); await sleep(300); }
   // A person only does the press move once the key they want is highlighted.
   const tally = { presses: 0, reAims: 0, gaveUp: 0, wrongKey: 0 };
+  // The keyboard's own keys come first, so the letter o means the O key, not a guess that happens to read "o".
   const findKey = (key) => {
-    const all = [...document.querySelectorAll("[data-key]")];
-    return all.find((e) => e.dataset.key === key || e.dataset.word === key)
+    const all = [...document.querySelectorAll("#keys [data-key]"), ...document.querySelectorAll("[data-key]")];
+    return all.find((e) => e.dataset.key === key) || all.find((e) => e.dataset.word === key)
       || (key.length === 1 ? all.find((e) => e.dataset.key.startsWith("g:") && e.dataset.key.slice(2).includes(key)) : undefined);   // big keys hold several letters
   };
   async function press(key) {
