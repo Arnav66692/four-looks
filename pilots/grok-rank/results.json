@@ -1,0 +1,654 @@
+{
+ "ranAt": "2026-11-15T09:51:47.178Z",
+ "summary": {
+  "cases": 31,
+  "firstChoiceRight": {
+   "app": 26,
+   "grok": 30
+  },
+  "onInAsEleven": {
+   "app": 10,
+   "grok": 11
+  },
+  "intendedAmongCandidates": 31,
+  "fellBack": 0,
+  "medianMs": 425,
+  "slowestMs": 936,
+  "bars": {
+   "gainAtLeast3": true,
+   "notWorseOnHers": true,
+   "medianUnder900": true
+  },
+  "pass": true
+ },
+ "rows": [
+  {
+   "before": "i need",
+   "typed": "wter",
+   "want": "water",
+   "local": "water",
+   "grok": "water",
+   "ok": true,
+   "error": null,
+   "ms": 936,
+   "inList": true,
+   "candidates": [
+    "water",
+    "where",
+    "weer",
+    "ter",
+    "her",
+    "when",
+    "we",
+    "after"
+   ]
+  },
+  {
+   "before": "i need",
+   "typed": "hepl",
+   "want": "help",
+   "local": "help",
+   "grok": "help",
+   "ok": true,
+   "error": null,
+   "ms": 399,
+   "inList": true,
+   "candidates": [
+    "help",
+    "health",
+    "hell",
+    "heal",
+    "heel",
+    "hep",
+    "heil"
+   ]
+  },
+  {
+   "before": "i am",
+   "typed": "tiredd",
+   "want": "tired",
+   "local": "tired",
+   "grok": "tired",
+   "ok": true,
+   "error": null,
+   "ms": 416,
+   "inList": true,
+   "candidates": [
+    "tired",
+    "tiredness",
+    "fired",
+    "wired",
+    "tried",
+    "tiered",
+    "tied"
+   ]
+  },
+  {
+   "before": "my",
+   "typed": "famly",
+   "want": "family",
+   "local": "family",
+   "grok": "family",
+   "ok": true,
+   "error": null,
+   "ms": 402,
+   "inList": true,
+   "candidates": [
+    "family",
+    "fault",
+    "daily",
+    "family's",
+    "fam",
+    "early",
+    "fly"
+   ]
+  },
+  {
+   "before": "i need",
+   "typed": "rst",
+   "want": "rest",
+   "local": "rest",
+   "grok": "rest",
+   "ok": true,
+   "error": null,
+   "ms": 368,
+   "inList": true,
+   "candidates": [
+    "rest",
+    "retail",
+    "rat",
+    "st",
+    "rt",
+    "rot",
+    "est"
+   ]
+  },
+  {
+   "before": "i am",
+   "typed": "hangry",
+   "want": "hungry",
+   "local": "hungry",
+   "grok": "hungry",
+   "ok": true,
+   "error": null,
+   "ms": 324,
+   "inList": true,
+   "candidates": [
+    "hungry",
+    "hanging",
+    "angry",
+    "harry",
+    "hang",
+    "henry",
+    "handy"
+   ]
+  },
+  {
+   "before": "i need",
+   "typed": "hlp",
+   "want": "help",
+   "local": "help",
+   "grok": "help",
+   "ok": true,
+   "error": null,
+   "ms": 337,
+   "inList": true,
+   "candidates": [
+    "help",
+    "him",
+    "halp",
+    "hip",
+    "hop",
+    "lp",
+    "hap"
+   ]
+  },
+  {
+   "before": "i am",
+   "typed": "coldd",
+   "want": "cold",
+   "local": "cold",
+   "grok": "cold",
+   "ok": true,
+   "error": null,
+   "ms": 386,
+   "inList": true,
+   "candidates": [
+    "cold",
+    "colder",
+    "old",
+    "told",
+    "colds",
+    "sold",
+    "could"
+   ]
+  },
+  {
+   "before": "my",
+   "typed": "glases",
+   "want": "glasses",
+   "local": "glasses",
+   "grok": "glasses",
+   "ok": true,
+   "error": null,
+   "ms": 387,
+   "inList": true,
+   "candidates": [
+    "glasses",
+    "glass",
+    "glazes",
+    "closest",
+    "gases",
+    "glares",
+    "glades"
+   ]
+  },
+  {
+   "before": "open the",
+   "typed": "dor",
+   "want": "door",
+   "local": "morning",
+   "grok": "door",
+   "ok": true,
+   "error": null,
+   "ms": 318,
+   "inList": true,
+   "candidates": [
+    "morning",
+    "dog",
+    "dorm",
+    "door",
+    "dor",
+    "doc",
+    "for",
+    "or"
+   ]
+  },
+  {
+   "before": "go",
+   "typed": "outsdie",
+   "want": "outside",
+   "local": "outside",
+   "grok": "outside",
+   "ok": true,
+   "error": null,
+   "ms": 415,
+   "inList": true,
+   "candidates": [
+    "outside",
+    "outsiders",
+    "outsider",
+    "outsides",
+    "outshine",
+    "outdid",
+    "outie"
+   ]
+  },
+  {
+   "before": "please close the",
+   "typed": "windw",
+   "want": "window",
+   "local": "window",
+   "grok": "window",
+   "ok": true,
+   "error": null,
+   "ms": 469,
+   "inList": true,
+   "candidates": [
+    "window",
+    "windy",
+    "wind",
+    "windows",
+    "winds",
+    "kind"
+   ]
+  },
+  {
+   "before": "i want to drink some",
+   "typed": "wter",
+   "want": "water",
+   "local": "water",
+   "grok": "water",
+   "ok": true,
+   "error": null,
+   "ms": 385,
+   "inList": true,
+   "candidates": [
+    "water",
+    "where",
+    "weer",
+    "ter",
+    "tea",
+    "other",
+    "beer",
+    "when"
+   ]
+  },
+  {
+   "before": "my",
+   "typed": "hed",
+   "want": "head",
+   "local": "head",
+   "grok": "head",
+   "ok": true,
+   "error": null,
+   "ms": 550,
+   "inList": true,
+   "candidates": [
+    "head",
+    "bed",
+    "heart",
+    "bedroom",
+    "hed",
+    "red",
+    "her",
+    "he"
+   ]
+  },
+  {
+   "before": "turn off the",
+   "typed": "ligt",
+   "want": "light",
+   "local": "light",
+   "grok": "light",
+   "ok": true,
+   "error": null,
+   "ms": 487,
+   "inList": true,
+   "candidates": [
+    "light",
+    "list",
+    "lift",
+    "lights",
+    "lit",
+    "lint",
+    "lig"
+   ]
+  },
+  {
+   "before": "i need to go to the",
+   "typed": "bathrom",
+   "want": "bathroom",
+   "local": "bathroom",
+   "grok": "bathroom",
+   "ok": true,
+   "error": null,
+   "ms": 474,
+   "inList": true,
+   "candidates": [
+    "bathroom",
+    "bathrooms",
+    "bathrobe",
+    "bathtub",
+    "fathom"
+   ]
+  },
+  {
+   "before": "call my",
+   "typed": "docter",
+   "want": "doctor",
+   "local": "doctor",
+   "grok": "doctor",
+   "ok": true,
+   "error": null,
+   "ms": 896,
+   "inList": true,
+   "candidates": [
+    "doctor",
+    "doctors",
+    "locker",
+    "doctor's",
+    "soccer",
+    "router",
+    "foster"
+   ]
+  },
+  {
+   "before": "i am very",
+   "typed": "tird",
+   "want": "tired",
+   "local": "tired",
+   "grok": "tired",
+   "ok": true,
+   "error": null,
+   "ms": 570,
+   "inList": true,
+   "candidates": [
+    "tired",
+    "hard",
+    "bird",
+    "tied",
+    "tire",
+    "third",
+    "turd"
+   ]
+  },
+  {
+   "before": "what",
+   "typed": "tme",
+   "want": "time",
+   "local": "the",
+   "grok": "time",
+   "ok": true,
+   "error": null,
+   "ms": 360,
+   "inList": true,
+   "candidates": [
+    "the",
+    "they",
+    "time",
+    "me",
+    "tie",
+    "toe",
+    "tome"
+   ]
+  },
+  {
+   "before": "i feel",
+   "typed": "sck",
+   "want": "sick",
+   "local": "sick",
+   "grok": "sick",
+   "ok": true,
+   "error": null,
+   "ms": 509,
+   "inList": true,
+   "candidates": [
+    "sick",
+    "like",
+    "sad",
+    "suck",
+    "sock",
+    "sack",
+    "sci",
+    "ck"
+   ]
+  },
+  {
+   "before": "can you",
+   "typed": "hlp",
+   "want": "help",
+   "local": "help",
+   "grok": "help",
+   "ok": true,
+   "error": null,
+   "ms": 475,
+   "inList": true,
+   "candidates": [
+    "help",
+    "happy",
+    "all",
+    "hop",
+    "hip",
+    "hap",
+    "lp",
+    "halp"
+   ]
+  },
+  {
+   "before": "i want to",
+   "typed": "wach",
+   "want": "watch",
+   "local": "wachovia",
+   "grok": "watch",
+   "ok": true,
+   "error": null,
+   "ms": 649,
+   "inList": true,
+   "candidates": [
+    "wachovia",
+    "wash",
+    "watch",
+    "washington",
+    "wach",
+    "each",
+    "waco",
+    "bach"
+   ]
+  },
+  {
+   "before": "the",
+   "typed": "fod",
+   "want": "food",
+   "local": "food",
+   "grok": "food",
+   "ok": true,
+   "error": null,
+   "ms": 425,
+   "inList": true,
+   "candidates": [
+    "food",
+    "for",
+    "god",
+    "follow",
+    "fed",
+    "fog",
+    "fox"
+   ]
+  },
+  {
+   "before": "i love my",
+   "typed": "famly",
+   "want": "family",
+   "local": "family",
+   "grok": "family",
+   "ok": true,
+   "error": null,
+   "ms": 340,
+   "inList": true,
+   "candidates": [
+    "family",
+    "fault",
+    "daily",
+    "family's",
+    "fam",
+    "early",
+    "fly"
+   ]
+  },
+  {
+   "before": "turn the",
+   "typed": "musc",
+   "want": "music",
+   "local": "music",
+   "grok": "music",
+   "ok": true,
+   "error": null,
+   "ms": 360,
+   "inList": true,
+   "candidates": [
+    "music",
+    "muscles",
+    "must",
+    "muse",
+    "mush",
+    "musk",
+    "misc"
+   ]
+  },
+  {
+   "before": "my",
+   "typed": "bak",
+   "want": "back",
+   "local": "back",
+   "grok": "back",
+   "ok": true,
+   "error": null,
+   "ms": 445,
+   "inList": true,
+   "candidates": [
+    "back",
+    "bak",
+    "baby",
+    "baking",
+    "bad",
+    "bank",
+    "bag",
+    "bae"
+   ]
+  },
+  {
+   "before": "i need my",
+   "typed": "medicne",
+   "want": "medicine",
+   "local": "medicine",
+   "grok": "medicine",
+   "ok": true,
+   "error": null,
+   "ms": 485,
+   "inList": true,
+   "candidates": [
+    "medicine",
+    "medication",
+    "medical",
+    "medicines",
+    "medicare",
+    "mediocre",
+    "medic"
+   ]
+  },
+  {
+   "before": "it is too",
+   "typed": "cld",
+   "want": "cold",
+   "local": "cold",
+   "grok": "cold",
+   "ok": true,
+   "error": null,
+   "ms": 468,
+   "inList": true,
+   "candidates": [
+    "cold",
+    "close",
+    "old",
+    "cud",
+    "cd",
+    "cod",
+    "clad"
+   ]
+  },
+  {
+   "before": "read me a",
+   "typed": "bok",
+   "want": "book",
+   "local": "joke",
+   "grok": "book",
+   "ok": true,
+   "error": null,
+   "ms": 386,
+   "inList": true,
+   "candidates": [
+    "joke",
+    "box",
+    "book",
+    "bottle",
+    "bok",
+    "boy",
+    "bow",
+    "bot"
+   ]
+  },
+  {
+   "before": "i am",
+   "typed": "thirty",
+   "want": "thirsty",
+   "local": "thirteen",
+   "grok": "thirty",
+   "ok": true,
+   "error": null,
+   "ms": 536,
+   "inList": true,
+   "candidates": [
+    "thirteen",
+    "thirty",
+    "thirsty",
+    "thirteenth",
+    "thingy",
+    "dirty",
+    "shirt",
+    "shirts"
+   ]
+  },
+  {
+   "before": "can i have some",
+   "typed": "mor",
+   "want": "more",
+   "local": "more",
+   "grok": "more",
+   "ok": true,
+   "error": null,
+   "ms": 773,
+   "inList": true,
+   "candidates": [
+    "more",
+    "for",
+    "morning",
+    "mornings",
+    "mor",
+    "or",
+    "mom",
+    "mo"
+   ]
+  }
+ ]
+}

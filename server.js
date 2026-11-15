@@ -85,6 +85,42 @@ async function grokFix(text) {
   return out ? { ok: true, text: out, model, spentUsd: +spent.usd.toFixed(4) } : { ok: false, error: "empty reply" };
 }
 
+// ---------- In A Park's idea: Grok ranks the spelling candidates by how well each fits the sentence ----------
+const RANK_MODEL = process.env.XAI_RANK_MODEL || "grok-4.20-0309-non-reasoning";     // the quickest model measured on this key
+const RANK_TIMEOUT_MS = 2500;
+const RANK_PROMPT = `A person is writing a sentence with an assistive keyboard. The last word of the sentence may be misspelled.
+Rank the candidate words by how well each one fits as the last word of that sentence.
+Use every candidate exactly once. Do not add words. Reply with only a JSON array of strings, best first.`;
+
+// Never throws. On any failure, or an answer that is not exactly the same words, the order comes back unchanged.
+async function grokRank(sentence, candidates) {
+  const same = { ok: false, ranked: candidates };
+  const key = process.env.XAI_API_KEY;
+  if (!key) return { ...same, error: "no key" };
+  const blocked = overBudget();
+  if (blocked) return { ...same, error: blocked };
+  const started = Date.now(), stop = new AbortController(), timer = setTimeout(() => stop.abort(), RANK_TIMEOUT_MS);
+  try {
+    const r = await fetch(`${XAI}/chat/completions`, {
+      method: "POST", signal: stop.signal,
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: RANK_MODEL, temperature: 0, max_tokens: 80, messages: [{ role: "system", content: RANK_PROMPT }, { role: "user", content: JSON.stringify({ sentence, candidates }) }] }),
+    });
+    if (!r.ok) return { ...same, error: `Grok replied ${r.status}` };
+    const body = await r.json();
+    addUsage(RANK_MODEL, body.usage);
+    const text = body.choices?.[0]?.message?.content || "";
+    const ranked = JSON.parse(text.slice(text.indexOf("["), text.lastIndexOf("]") + 1));
+    const lower = (list) => list.map((w) => String(w).toLowerCase()).sort().join("|");
+    if (!Array.isArray(ranked) || ranked.length !== candidates.length || lower(ranked) !== lower(candidates)) return { ...same, error: "answer was not the same words", ms: Date.now() - started };
+    // Hand back the app's own spellings, in Grok's order.
+    const byLower = new Map(candidates.map((w) => [w.toLowerCase(), w]));
+    return { ok: true, ranked: ranked.map((w) => byLower.get(String(w).toLowerCase())), ms: Date.now() - started, model: RANK_MODEL };
+  } catch (err) {
+    return { ...same, error: stop.signal.aborted ? "timed out" : (err instanceof Error ? err.message : "failed"), ms: Date.now() - started };
+  } finally { clearTimeout(timer); }
+}
+
 function readBody(req, max = 10000) {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -101,6 +137,17 @@ createServer(async (req, res) => {
     try {
       const { text } = JSON.parse(await readBody(req));
       result = typeof text === "string" && text.trim() && text.length <= MAX_TEXT ? await grokFix(text.trim()) : { ok: false, error: "bad text" };
+    } catch (err) { result = { ok: false, error: err instanceof Error ? err.message : "failed" }; }
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
+    return;
+  }
+  if (url === "/api/rank" && req.method === "POST") {
+    let result = { ok: false, error: "bad request" };
+    try {
+      const { sentence, candidates } = JSON.parse(await readBody(req));
+      const fine = typeof sentence === "string" && sentence.trim() && sentence.length <= 300 && Array.isArray(candidates)
+        && candidates.length >= 2 && candidates.length <= 8 && candidates.every((w) => typeof w === "string" && /^[A-Za-z']{1,24}$/.test(w));
+      if (fine) result = await grokRank(sentence.trim(), candidates);
     } catch (err) { result = { ok: false, error: err instanceof Error ? err.message : "failed" }; }
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
     return;
