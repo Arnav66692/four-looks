@@ -548,7 +548,8 @@ const isLocked = (t) => lockShare(t) >= LOCK_AT;
 // keys that change things never reach: in the 11:07 PM tremor run a locked shift held on while the cursor
 // sat in the middle of S, and the S came out as a capital. Pressing one of those by accident costs more
 // than aiming at it again.
-const reaches = (el, t) => isLocked(t) && !SLOW_KEYS.has(el?.dataset.key);
+// Undo is the exception: it repeats while you stay on it, so it keeps its reach to hold the selection steady.
+const reaches = (el, t) => isLocked(t) && (!SLOW_KEYS.has(el?.dataset.key) || REPEATS.has(el?.dataset.key));
 function stillOn(el, x, y, t) {
   if (!el || !el.isConnected) return false;
   // Before the lock a key keeps only a hair past its edge, enough to stop flicker on the line between two keys.
@@ -652,7 +653,12 @@ function movePointer(x, y, t, past = null) {
       // with a strong tremor the fill is slower, not stuck (a hard stop stalled keys in the tremor run).
       const then = history.find((h) => t - h.t <= STILL_MS) || history[history.length - 1];
       const moved = then ? Math.hypot(x - then.x, y - then.y) / keyWidth : 0;
-      const rate = moved <= STILL_MOVE ? 1 : Math.max(MOVING_RATE, 1 - ((moved - STILL_MOVE) / (FAST_MOVE - STILL_MOVE)) * (1 - MOVING_RATE));
+      // Time counts toward a press only while the cursor is on the key itself. A locked key keeps the
+      // selection when tremor carries the cursor a little past its edge, and its fill waits there, but it
+      // cannot fire while the cursor sits inside a different key. In the 12:30 AM tremor run a locked space
+      // bar kept filling with the cursor inside M, and space was typed in place of M.
+      const under = keyAt(x, y), onIt = !under || under === holdEl;
+      const rate = !onIt ? 0 : moved <= STILL_MOVE ? 1 : Math.max(MOVING_RATE, 1 - ((moved - STILL_MOVE) / (FAST_MOVE - STILL_MOVE)) * (1 - MOVING_RATE));
       // Keys that change things instead of typing (shift, undo, fix, send and the like) take half as long again.
       holdP += (rate * dtHold) / (DWELL * (SLOW_KEYS.has(holdEl.dataset.key) ? SLOW_HOLD : 1));
       holdAt.x += rate * x; holdAt.y += rate * y; holdAt.n += rate;
