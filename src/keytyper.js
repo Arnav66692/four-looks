@@ -8,6 +8,20 @@ const OOV_PRIOR = -7.0;          // log10 word-model score given to a word the d
 const LEARNED_PRIOR = -3.5;      // log10 score of a word from the person's own list
 const MIXED_CASE = new Map(["YouTube", "iPhone", "iPad", "eBay", "MacBook", "GitHub", "LinkedIn", "PayPal", "ChatGPT", "WiFi", "TikTok", "JavaScript", "PowerPoint", "FaceTime", "iMessage", "AirPods", "McDonald"].map((w) => [w.toLowerCase(), w]));
 const WEB_ENDS = new Set(["com", "org", "net", "edu", "gov", "io", "ai", "co", "app", "dev", "us", "uk"]);
+const EDIT_COST = 2.0;        // what one spelling edit costs a suggestion (log10 units)
+const SPELL_LETTERS = "abcdefghijklmnopqrstuvwxyz'";
+// Every string one edit away: a letter dropped, two letters swapped, a letter changed, a letter added.
+function edits1(w) {
+  const out = new Set();
+  for (let i = 0; i <= w.length; i++) {
+    const a = w.slice(0, i), b = w.slice(i);
+    if (b) out.add(a + b.slice(1));
+    if (b.length > 1) out.add(a + b[1] + b[0] + b.slice(2));
+    for (const c of SPELL_LETTERS) { if (b) out.add(a + c + b.slice(1)); out.add(a + c + b); }
+  }
+  out.delete(w);
+  return out;
+}
 const USED_BOOST = 0.35;      // how much a word this person has used before rises (log10 units per tenfold use)
 const ADDED_APOSTROPHE = -1.0;   // cost of a dictionary word adding an apostrophe you did not type
 const RAW_CHARS = /[@#:/$_\-0-9+=&%*]/;   // once one of these is in a token, nothing in it is corrected
@@ -236,7 +250,13 @@ export class KeyTyper {
     if (this.groupMode()) return [...new Set([best, longer[0], ...others, longer[1]])].filter(Boolean).slice(0, n + 2);
     // The first (bold) guess is the likeliest LONGER word. The same-length word is what space gives anyway,
     // and in his own sessions 8 of 12 words picked while typing were longer than the letters typed.
-    const order = [longer[0], best, longer[1], longer[2], ...others, typed].filter(Boolean);
+    // When the letters typed are not a word at all, the closest real spellings lead ("wter" shows water).
+    const lower = typed.toLowerCase();
+    const unknown = this.dec.idOf(lower) < 0 && !this.learned.has(lower);
+    const fixes = this.spell(3).map((w) => this.caseLike(w));
+    const order = (unknown && fixes.length
+      ? [fixes[0], longer[0], best, fixes[1], fixes[2], longer[1], ...others, typed]
+      : [longer[0], best, longer[1], fixes[0], longer[2], ...others, typed]).filter(Boolean);
     const out = [...new Set(order)].slice(0, n + 1);
     if (!out.includes(typed) && typed !== best) out[out.length - 1] = typed;
     return out;
@@ -268,6 +288,30 @@ export class KeyTyper {
     this.committed = body.slice(0, body.length - fix.to.length) + fix.from + tail;
     this.learn([fix.from]);
     return true;
+  }
+
+  // Spelling suggestions: dictionary words a letter or two away from what was typed, where an edit is a
+  // missing letter, an extra letter, a wrong letter, or two letters swapped ("wter" gives water, "hepl" gives
+  // help, "outsdie" gives outside). This was In A Park's idea, with a spelling-dictionary lookup in place of
+  // a fixed list. Here the words are ranked by how likely each is after the word before, less a cost per edit.
+  spell(n = 3) {
+    const typed = this.typedWord().toLowerCase();
+    if (typed.length < 2 || this.raw || this.groupMode() || !/^[a-z']+$/.test(typed)) return [];
+    const hist = this.history(), key = `${typed}|${hist}|${n}`;
+    if (this.spellCache?.key === key) return this.spellCache.out;
+    const found = new Map();
+    const add = (word, edits) => {
+      if (word === typed || found.has(word)) return;
+      const id = this.dec.idOf(word);
+      if (id >= 0) found.set(word, this.dec.lm(hist, id) - EDIT_COST * edits + this.boost(word));
+      else if (this.learned.has(word)) found.set(word, LEARNED_PRIOR - EDIT_COST * edits);
+    };
+    const near = edits1(typed);
+    for (const w of near) add(w, 1);
+    if (found.size < n && typed.length >= 4) for (const w1 of near) for (const w2 of edits1(w1)) add(w2, 2);      // two edits only when one is not enough
+    const out = [...found.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([w]) => w);
+    this.spellCache = { key, out };
+    return out;
   }
 
   // Longer words that start with what is typed so far.
