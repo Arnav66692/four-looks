@@ -119,7 +119,7 @@ In mouse mode (the mouse key) your head moves the real cursor, a quick opening o
 
 All in the dots menu.
 
-- **Key layout.** Head (the most used letters in the middle row), boxes (eight big keys in phone pad order), or qwerty.
+- **Key layout.** Qwerty (the default), head (the most used letters in the middle row), or boxes (eight big keys in phone pad order).
 - **Hold to press** and **Hold time.** Press by holding still, for 1.0, 0.8 or 0.6 seconds.
 - **Press with.** Smile, open mouth, pucker, raised brows or a firm blink.
 - **Head reach.** How far the cursor moves for the same head turn.
@@ -158,13 +158,19 @@ npm run check
 
 It runs the offline checks for the Grok agent and types a list of strange words (names, slang, web addresses) through the word guesser. It should end with `0 failed` and every word typed exactly.
 
-To watch the keyboard work without a face, open http://localhost:5173/?sim=1 for a simulated one. The full simulation suite takes about ten minutes. Open http://localhost:5173/?sim=1&app=1&noise=0.004&spike=0.04&lag=120, then in the browser console run
+To watch the keyboard work without a face, open http://localhost:5173/?sim=1 for a simulated one.
 
-```js
-(await import("/hardsim.js")).run()
+The full simulation suite has 13 scenarios and takes about ten minutes for each setting. With the server running (`node server.js`), run it in a headless Chrome.
+
+```bash
+node tools/hardsim-run.mjs tremor
 ```
 
-and read `window.__hard` when it finishes.
+```bash
+node tools/hardsim-run.mjs spikes
+```
+
+It needs Chrome and `playwright-core` (set `PLAYWRIGHT` to its folder). `node tools/spell-check.mjs` checks the spelling suggestions against eleven misspelled words.
 
 ## If something goes wrong
 
@@ -184,11 +190,13 @@ and read `window.__hard` when it finishes.
 
 ## What works today, and what does not
 
-As of Nov 14, 2026.
+As of Nov 15, 2026.
 
 - **Typing into another app works.** It has typed into a Gmail draft on the Mac it was built on.
 - **It is slow so far.** A first-day user measured about 2 to 3 words a minute. Taking the suggested words is faster than spelling.
 - **The word guesser** gets 97.5% of words right when key presses are scattered by 0.35 of a key width (1,048 words, `node tools/kb-smoke.mjs 0.35`, needs `--eval` data).
+- **Spelling suggestions.** A misspelled word brings up real words a letter or two away. On a teammate's eleven test words the right word was shown for all eleven, and was the first guess for ten (`node tools/spell-check.mjs`).
+- **Simulated use.** The 13 scenario suite passes under strong tremor and under spike frames at the real window size. That is a simulated face, not a second person.
 - **Grok tasks ran end to end on one Mac.** Opening an app took 0.2 seconds and typing into a document took 3.0 seconds.
 - **Clicks that Grok places from a screenshot are rough.** It prefers links, shortcuts and buttons it can find by name.
 - **Not tested.** The desktop app on Windows or Linux (use the browser there), Intel Macs, faces other than the builder's, glasses, low light.
