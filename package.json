@@ -10,11 +10,18 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
+    "setup": "node tools/setup.mjs",
+    "web": "node server.js",
     "start": "node server.js",
     "app": "electron .",
     "eval": "node tools/eval.mjs dev",
     "study": "FL_STUDY=1 electron .",
     "analyze": "node tools/analyze-session.mjs",
-    "tune": "FL_STUDY=tune electron ."
-  }
+    "tune": "FL_STUDY=tune electron .",
+    "check": "node electron/agent-test.mjs && node tools/strange-words.mjs 0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "description": "Type and control a computer with your head, using only a laptop camera."
 }
