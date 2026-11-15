@@ -10,6 +10,8 @@ const MIXED_CASE = new Map(["YouTube", "iPhone", "iPad", "eBay", "MacBook", "Git
 const WEB_ENDS = new Set(["com", "org", "net", "edu", "gov", "io", "ai", "co", "app", "dev", "us", "uk"]);
 const RARE_WORD = -4.6;       // log10 frequency below which a word the list knows is treated as a likely misspelling.
                               // The list holds 62,760 tokens and many are junk: dor, bok, hed, wach, freind all count as words.
+const JUNK_WORD = -5.4;       // below this a listed word is almost surely a junk token (dor, bok, hed, freind), not a word someone meant.
+                              // Real but uncommon words sit above it: pharmacy, ambulance, wheelchair, boba.
 const EDIT_COST = 2.0;        // what one spelling edit costs a suggestion (log10 units)
 const SPELL_LETTERS = "abcdefghijklmnopqrstuvwxyz'";
 // Every string one edit away: a letter dropped, two letters swapped, a letter changed, a letter added.
@@ -275,11 +277,20 @@ export class KeyTyper {
     return !this.used.has(lower) && this.dec.uni[id] < RARE_WORD;
   }
 
-  // True while the letters could still be the start of an ordinary word: the person is probably mid-word,
-  // not misspelling. ("wat" may become water. "wter" cannot become anything.)
+  // True while the letters could still be the start of a real word: the person is probably mid-word, not
+  // misspelling. ("wat" may become water, "pharm" may become pharmacy. "wter" cannot become anything.)
   mayGrow(lower) {
-    this.common ||= this.dec.words.filter((w, id) => this.dec.uni[id] >= RARE_WORD);
-    return this.common.some((w) => w.length > lower.length && w.startsWith(lower)) || [...this.learned].some((w) => w.length > lower.length && w.startsWith(lower));
+    this.growth ||= this.dec.words.filter((w, id) => this.dec.uni[id] >= JUNK_WORD);
+    const starts = (w) => w.length > lower.length && w.startsWith(lower);
+    return this.growth.some(starts) || [...this.learned].some(starts) || [...this.used.keys()].some(starts);
+  }
+
+  // Worth a paid question: letters the list does not know, or knows only as a junk token. A real word,
+  // however uncommon, is not sent, and neither is anything the person has used or kept.
+  worthAsking(lower) {
+    if (this.learned.has(lower) || this.used.has(lower)) return false;
+    const id = this.dec.idOf(lower);
+    return id < 0 || this.dec.uni[id] < JUNK_WORD;
   }
 
   // Grok's pick for these exact letters in this exact place goes first, which is the bold guess in the

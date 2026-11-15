@@ -200,7 +200,7 @@ As of Nov 15, 2026.
 - **Spelling suggestions.** A misspelled word brings up real words a letter or two away. On a teammate's eleven test words the right word was shown for all eleven, and was the first guess for ten (`node tools/spell-check.mjs`).
 - **Grok guesses, measured.** On 31 misspelled sentences the app alone puts the right word first in 29, and Grok in 30, answering in about 0.4 seconds. So it adds a little, not a lot. The test and its two runs are in `pilots/grok-rank`.
 - **Selections.** The line at the bottom right counts every key, guess, nod and undo, next to speed and keys saved.
-- **Simulated use.** The 14 scenario suite passes under strong tremor and under spike frames at the real window size. That is a simulated face, not a second person.
+- **Simulated use.** A 14 scenario suite runs a simulated face at the real window size under strong tremor and under spike frames. In the last full run 13 of 14 passed under each setting. The two that failed (one nod test, one head shake test) passed three reruns each, so under the heaviest noise a gesture is missed now and then. That is a simulated face, not a second person.
 - **Grok tasks ran end to end on one Mac.** Opening an app took 0.2 seconds and typing into a document took 3.0 seconds.
 - **Clicks that Grok places from a screenshot are rough.** It prefers links, shortcuts and buttons it can find by name.
 - **Not tested.** The desktop app on Windows or Linux (use the browser there), Intel Macs, faces other than the builder's, glasses, low light.

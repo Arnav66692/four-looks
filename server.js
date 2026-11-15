@@ -119,13 +119,14 @@ async function grokRank(sentence, candidates) {
   const blocked = rankBlocked();
   if (blocked) return { ...same, error: blocked };
   const started = Date.now(), stop = new AbortController(), timer = setTimeout(() => stop.abort(), RANK_TIMEOUT_MS);
-  let counted = false;
+  let counted = false, replied = false;
   try {
     const r = await fetch(`${XAI}/chat/completions`, {
       method: "POST", signal: stop.signal,
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
       body: JSON.stringify({ model: RANK_MODEL, temperature: 0, max_tokens: 80, messages: [{ role: "system", content: RANK_PROMPT }, { role: "user", content: JSON.stringify({ sentence, candidates }) }] }),
     });
+    replied = true;
     if (!r.ok) return { ...same, error: `Grok replied ${r.status}` };
     const body = await r.json();
     addRankUsage(body.usage); counted = true;
@@ -137,8 +138,9 @@ async function grokRank(sentence, candidates) {
     const byLower = new Map(candidates.map((w) => [w.toLowerCase(), w]));
     return { ok: true, ranked: ranked.map((w) => byLower.get(String(w).toLowerCase())), ms: Date.now() - started, model: RANK_MODEL };
   } catch (err) {
-    // A call that timed out or broke off may still have been billed. Count it at a rough size, so it cannot slip past the guard.
-    if (!counted) { try { addRankUsage({ prompt_tokens: 250, completion_tokens: 80 }); } catch { /* the ledger could not be written */ } }
+    // A call that timed out, or broke off after xAI answered, may still have been billed. Count it at a rough
+    // size, so it cannot slip past the guard. A call that never left this computer (offline) is not counted.
+    if (!counted && (stop.signal.aborted || replied)) { try { addRankUsage({ prompt_tokens: 250, completion_tokens: 80 }); } catch { /* the ledger could not be written */ } }
     return { ...same, error: stop.signal.aborted ? "timed out" : (err instanceof Error ? err.message : "failed"), ms: Date.now() - started };
   } finally { clearTimeout(timer); }
 }

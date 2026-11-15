@@ -448,7 +448,7 @@ function askRank() {
   if (!rankOn || rankDead || grokMode || !typer || typer.raw || typer.groupMode()) return;
   const typed = typer.typedWord().toLowerCase();
   // An ordinary word needs no ranking, and neither do letters that may still grow into one (an unfinished word).
-  if (typed.length < 2 || !/^[a-z']+$/.test(typed) || !typer.doubtful(typed) || typer.mayGrow(typed)) return;
+  if (typed.length < 2 || !/^[a-z']+$/.test(typed) || !typer.worthAsking(typed) || typer.mayGrow(typed)) return;
   const candidates = typer.rankCandidates();
   const sentence = `${typer.committed}${typed}`.trim().split(/\s+/).slice(-12).join(" "), key = sentence.toLowerCase();
   if (candidates.length < 2) return;
@@ -480,7 +480,7 @@ function askRank() {
 // Otherwise the word under the cursor would change while you were still aiming at it.
 function offerRank(pick) {
   if (!typer || pick.place !== rankPlace()) { if (rankHeld === pick) rankHeld = null; return; }      // you typed on: the answer is for letters that are gone
-  if (chipsOffSince == null || pointerT - chipsOffSince <= RANK_OFF_MS) { rankHeld = pick; return; }
+  if (hoverEl?.closest("#chips") || chipsOffSince == null || pointerT - chipsOffSince <= RANK_OFF_MS) { rankHeld = pick; return; }
   rankHeld = null;
   typer.rankTop = { typed: pick.typed, at: pick.at, word: pick.word };
   for (const el of $("chips").children) { fading.delete(el); setFill(el, 0); }      // a part-filled guess must not finish on a different word
