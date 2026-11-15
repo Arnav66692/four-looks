@@ -6,16 +6,48 @@ Point your nose at a key and hold still to press it. A word guesser fixes near m
 
 Built at SanD Hacks, Nov 14 to 15, 2026.
 
+## Before you start
+
+You need a webcam, an internet connection, and two things on the computer. Those are Node and a copy of this project.
+
+### 1. Node
+
+Node runs the app. Open a terminal (Terminal on a Mac, PowerShell on Windows) and check whether you already have it.
+
+```bash
+node --version
+```
+
+If it prints `v20` or higher, skip to step 2. If it says the command is not found, or the number is lower, install it one of these ways.
+
+- **Mac or Windows, the simple way.** Download the LTS installer from [nodejs.org](https://nodejs.org) and run it.
+- **Mac with Homebrew.** `brew install node`
+- **Windows with winget.** `winget install OpenJS.NodeJS.LTS`
+- **Linux.** Follow [nodejs.org/en/download](https://nodejs.org/en/download). The version in many package managers is too old.
+
+Close the terminal, open a new one, and run `node --version` again to confirm. Installing Node also installs `npm`, which the Mac app uses.
+
+### 2. A copy of this project
+
+With git, run this in the terminal.
+
+```bash
+git clone https://github.com/Arnav66692/four-looks.git
+```
+
+Without git, open the project page on GitHub, press the green **Code** button, choose **Download ZIP**, and unzip it. The folder is then called `four-looks-main`, so use that name wherever the steps below say `four-looks`.
+
+On a Mac, the first `git` command may offer to install Apple's command line tools. Say yes. That also gives you the compiler the head mouse needs.
+
 ## Try it
 
-Pick one. Both need [Node](https://nodejs.org) 20 or newer, a webcam, and an internet connection.
+Pick one of the two ways below.
 
 ### In a browser, on any computer
 
 About one minute. No `npm install`.
 
 ```bash
-git clone https://github.com/Arnav66692/four-looks.git
 cd four-looks
 node tools/setup.mjs --web
 node server.js
@@ -28,7 +60,6 @@ You get the keyboard, the word guesser, the three key layouts and the speak key.
 ### The Mac app
 
 ```bash
-git clone https://github.com/Arnav66692/four-looks.git
 cd four-looks
 npm install
 npm run setup
@@ -136,6 +167,9 @@ and read `window.__hard` when it finishes.
 
 | What you see | What to do |
 |---|---|
+| `node: command not found` | Node is not installed, or the terminal was open before you installed it. See Before you start, then open a new terminal |
+| `git: command not found` | Use the Download ZIP way in Before you start |
+| Setup says Node 20 or newer is needed | Install the current LTS from nodejs.org |
 | "Starting the camera" and nothing else | The app that launched it has no camera access. Start the Mac app from Terminal. In a browser, allow the camera for localhost |
 | Nothing appears in the other app | Turn on Accessibility for Terminal, then start the app again |
 | `four looks is already running` | Another copy is open. Quit it with Control Option Q |
