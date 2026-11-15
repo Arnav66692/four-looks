@@ -11,6 +11,12 @@ const LAG_MS = Number(Q.get("lag") || 0);          // camera pipeline delay to s
 const delayed = [];
 const SPIKE = Number(Q.get("spike") || 0);         // chance per frame of a single-frame jump of 5 times the tremor
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A person corrects an aim, then waits to SEE the cursor answer before correcting again. With a camera
+// delay the cursor answers late, so the wait is the delay plus a moment to notice. Correcting faster than
+// the delay (as this used to, every 133 ms against a 150 ms delay) made the simulated head swing back and
+// forth past the key, wider each time: in the 11:19 PM tremor run it swung 290 px around the E key.
+const SEE_MS = Math.max(HZ * 4, LAG_MS + 100);
+const AIM_OK = 0.3;       // close enough: the cursor is inside the middle 60% of the key
 const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(2 * Math.PI * Math.random());
 
 const SCORES = {
@@ -101,12 +107,12 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       const c = window.fourLooks.cursor && window.fourLooks.cursor();
       if (!c || (done && done())) break;
       const ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
-      if (Math.abs(ex) * innerWidth < r.width * 0.2 && Math.abs(ey) * innerHeight < r.height * 0.2) break;
+      if (Math.abs(ex) * innerWidth < r.width * AIM_OK && Math.abs(ey) * innerHeight < r.height * AIM_OK) break;
       if (LAZY && document.querySelector(".hover") === el) break;        // most people stop as soon as the key lights up
       const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1;   // people adapt to how far the cursor travels
       // People correct an aim in one or two quick moves, not by creeping: most of the error at once.
       head.x += (0.6 * ex) / g; head.y += (0.6 * ey) / g;
-      await sleep(HZ * 4);
+      await sleep(SEE_MS);
     }
     await sleep(260);
   }
