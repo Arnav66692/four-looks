@@ -348,15 +348,25 @@ export class KeyTyper {
     const hist = this.history(), key = `${typed}|${hist}|${n}`;
     if (this.spellCache?.key === key) return this.spellCache.out;
     const found = new Map();
+    // A fix two edits away must still hold nearly all the letters typed (water holds every letter of "wtre").
+    // Without this, short very common words two swaps away crowded it out ("wtre" gave more and the).
+    const keeps = (word) => { let lost = 0, rest = word; for (const c of typed) { const i = rest.indexOf(c); if (i < 0) lost++; else rest = rest.slice(0, i) + rest.slice(i + 1); } return lost <= 1; };
     const add = (word, edits) => {
-      if (word === typed || found.has(word)) return;
+      if (word === typed || found.has(word) || (edits === 2 && !keeps(word))) return;
       const id = this.dec.idOf(word);
       if (id >= 0) found.set(word, this.dec.lm(hist, id) - EDIT_COST * edits + this.boost(word));
       else if (this.learned.has(word)) found.set(word, LEARNED_PRIOR - EDIT_COST * edits);
     };
     const near = edits1(typed);
     for (const w of near) add(w, 1);
-    if (found.size < n && typed.length >= 4) for (const w1 of near) for (const w2 of edits1(w1)) add(w2, 2);      // two edits only when one is not enough
+    // Two edits ("wtre" to water, "gasles" to glasses). Looked for when one edit is not enough, and also
+    // whenever the letters are not a real word: a likely word two edits away can beat an unlikely one
+    // that is one edit away ("i need wtre" gave were, wire, more and never water). Each edit still costs.
+    // Not while the letters may still grow into a word (an unfinished word needs no fixing, and the search
+    // is the slow part: it froze a key for about a quarter of a second on long words).
+    // And not for a real word, however uncommon (wheelchair): only for letters the list does not know or knows as junk.
+    const tid = this.dec.idOf(typed), notWord = !this.learned.has(typed) && (tid < 0 || this.dec.uni[tid] < JUNK_WORD);
+    if (typed.length >= 4 && typed.length <= 10 && notWord && !this.mayGrow(typed)) for (const w1 of near) for (const w2 of edits1(w1)) add(w2, 2);
     const out = [...found.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([w]) => w);
     this.spellCache = { key, out };
     return out;
