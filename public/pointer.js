@@ -6,6 +6,15 @@ const EDGE_GAIN = 0.6;      // out there it moves this much for the same head mo
 const EDGE_STEADY = 1.8;    // and ignores this much more tremor (head pose is noisier at big angles)
 const soften = (v) => { const d = v - 0.5, a = Math.abs(d); return a <= EDGE_ZONE ? v : 0.5 + Math.sign(d) * (EDGE_ZONE + (a - EDGE_ZONE) * EDGE_GAIN); };
 const edginess = (v) => Math.min(1, Math.max(0, (Math.abs(v - 0.5) - EDGE_ZONE) / (0.5 - EDGE_ZONE)));
+// Fine control. A slow, small head movement moves the cursor at reduced gain, so a small correction is
+// easy to land and tremor shows up half as large. A fast, large movement moves it fully and pulls the
+// cursor back onto the exact spot the head points at. The cursor is never more than FINE_MAX_OFF keys
+// away from that spot, and at rest it does not creep.
+const FINE_GAIN = 0.5;      // gain for slow movements
+const FINE_SLOW = 1.5;      // key widths a second: at or below this the movement is slow
+const FINE_FAST = 5;        // at or above this it is fast: full gain and catch up
+const FINE_CATCH = 0.35;    // share of the remaining gap closed each frame while moving fast
+const FINE_MAX_OFF = 0.35;  // the cursor may sit this many keys from where the head points, no more
 const MAX_STEP = 0.12;      // the most one camera frame may move the reading, in screen units
 // Look-ahead is off: on the simulated face with 120 ms camera delay it cut 50 ms of lag but more than
 // doubled overshoot (about 64 px against 23 px on a 300 px move). Add ?lead=1 to the address to try it.
@@ -82,6 +91,9 @@ export class HeadPointer {
     this.offset = [0, 0];      // set only by a deliberate recenter, in screen units
     this.steady = 1;           // above 1 while a key is locked: small head tremor moves the cursor less
     this.past = { left: 0, right: 0, up: 0, down: 0 };
+    this.precision = false;    // fine control: off unless switched on (it failed its test as a default)
+    this.unit = [0.1, 0.13];   // one key, as a share of the window width and height (set by the page)
+    this.fineAt = null; this.finePrev = null; this.fineT = 0; this.fineV = 0;
   }
   get ready() { return !!(this.map || this.range); }
 
@@ -93,7 +105,7 @@ export class HeadPointer {
   }
 
   // poses: head pose samples (means). targets: matching points in 0..1 screen units.
-  fit(poses, targets) { this.map = fitAffine(poses, targets); this.range = null; this.offset = [0, 0]; }
+  fit(poses, targets) { this.map = fitAffine(poses, targets); this.range = null; this.offset = [0, 0]; this.fineAt = null; }
 
   // Calibration to the person's own range. c is the pose facing the middle. left, right, up and down
   // are the poses at the furthest comfortable turn each way. area says where those should land on
@@ -125,7 +137,7 @@ export class HeadPointer {
     if (!this.ready || !pose) return false;
     const at = this.project(pose);
     this.offset = [x - at[0], y - at[1]];
-    this.shown = null;
+    this.shown = null; this.fineAt = null;
     return true;
   }
 
@@ -148,19 +160,39 @@ export class HeadPointer {
     const f = [this.fx.filter(raw[0], calm(0)), this.fy.filter(raw[1], calm(1))];
     // How far past the edge of the window the head points, per side, in screen units (0 when inside).
     this.past = { left: Math.max(0, -f[0]), right: Math.max(0, f[0] - 1), up: Math.max(0, -f[1]), down: Math.max(0, f[1] - 1) };
+    const g = this.fine(f, t);
     // Look-ahead: while the head is clearly moving, draw the cursor a little ahead along its path.
     // A cursor that trails the head makes people turn too far and swing back.
     const dt = this.leadT ? Math.max((t - this.leadT) / 1000, 1e-3) : 0;
     const p = [0, 1].map((k) => {
-      if (!dt || !this.leadPrev) return clamp(f[k]);
+      if (!dt || !this.leadPrev) return clamp(g[k]);
       this.vel[k] += 0.5 * ((f[k] - this.leadPrev[k]) / dt - this.vel[k]);
       const v = this.vel[k], lead = this.lead > 0 && Math.abs(v) > LEAD_MIN_SPEED ? Math.max(-LEAD_CAP, Math.min(LEAD_CAP, v * this.lead)) : 0;
-      return clamp(f[k] + lead);
+      return clamp(g[k] + lead);
     });
     this.leadPrev = f; this.leadT = t;
     if (this.shown && Math.hypot(p[0] - this.shown[0], p[1] - this.shown[1]) < this.deadzone) return this.shown;
     this.shown = p;
     return p;
+  }
+
+  // Fine control: target is where the head points (unclamped, so the cursor can still be pushed to an edge).
+  fine(target, t) {
+    if (!this.precision || !this.fineAt || !this.finePrev) { this.fineAt = target.slice(); this.finePrev = target.slice(); this.fineT = t; this.fineV = 0; return target; }
+    const dt = Math.max((t - this.fineT) / 1000, 1e-3);
+    this.fineT = t;
+    const dx = target[0] - this.finePrev[0], dy = target[1] - this.finePrev[1];
+    this.finePrev = target.slice();
+    const v = Math.hypot(dx / this.unit[0], dy / this.unit[1]) / dt;
+    this.fineV += 0.4 * (v - this.fineV);                         // smoothed, so one noisy frame does not flip the gain
+    const k = Math.min(1, Math.max(0, (this.fineV - FINE_SLOW) / (FINE_FAST - FINE_SLOW))), s = k * k * (3 - 2 * k);
+    const gain = FINE_GAIN + (1 - FINE_GAIN) * s;
+    let x = this.fineAt[0] + gain * dx, y = this.fineAt[1] + gain * dy;
+    x += FINE_CATCH * s * (target[0] - x); y += FINE_CATCH * s * (target[1] - y);
+    const ox = (x - target[0]) / this.unit[0], oy = (y - target[1]) / this.unit[1], off = Math.hypot(ox, oy);
+    if (off > FINE_MAX_OFF) { x = target[0] + (ox / off) * FINE_MAX_OFF * this.unit[0]; y = target[1] + (oy / off) * FINE_MAX_OFF * this.unit[1]; }
+    this.fineAt = [x, y];
+    return this.fineAt;
   }
 
   // Unsmoothed, unclamped screen point. Used to spot quick gestures such as a nod.

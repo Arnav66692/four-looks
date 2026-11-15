@@ -11,6 +11,12 @@ const LAG_MS = Number(Q.get("lag") || 0);          // camera pipeline delay to s
 const delayed = [];
 const SPIKE = Number(Q.get("spike") || 0);         // chance per frame of a single-frame jump of 5 times the tremor
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A correction takes a moment to show on screen: the camera delay plus a little smoothing. A person knows
+// they have already moved and does not correct the same error twice while waiting to see it. Without
+// this the simulated head corrected every 133 ms against a 150 ms delay, piled corrections on top of each
+// other and swung past the key, wider each time (290 px around the E key in the 11:19 PM tremor run).
+const SEE_MS = LAG_MS + 100;
+const AIM_OK = 0.2;       // close enough: the cursor is inside the middle 40% of the key
 const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(2 * Math.PI * Math.random());
 
 const SCORES = {
@@ -72,7 +78,7 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       const typeIt = !big && text.match(/Type: (.+)$/);
       if (typeIt) { steering = true; type(typeIt[1] + " ").finally(() => { steering = false; }); }
       if (!big) return;
-      if (/Lower your eyebrows/.test(text)) { cue("frown", 2300, 0.7); return; }      // the frown lesson
+      if (/lower your eyebrows/i.test(text)) { cue("frown", 3200, 0.7); return; }      // the frown lesson, step 2
       if (/ now\.$/.test(text) && !/normally|relax/i.test(text)) cue(cueName(), 520);
       if (/talk a little|look around|blink normally/i.test(text)) chatter();
     }
@@ -90,21 +96,27 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
     }
   }
   // Like a person: glance toward the key, then watch the cursor and steer until it sits on the key.
-  async function lookAtKey(key, miss = 0.12) {
+  // done: an optional check for "it has been pressed". A person stops adjusting the moment the key goes off.
+  async function lookAtKey(key, miss = 0.12, done = null) {
     const el = findKey(key);
     if (!el) throw new Error(`no key ${key}`);
     const r = el.getBoundingClientRect();
     const tx = (r.left + r.width / 2 + miss * r.width * gauss()) / innerWidth, ty = (r.top + r.height / 2 + miss * r.height * gauss()) / innerHeight;
     await lookAt(tx, ty);
+    const sent = [];                 // corrections made but not yet visible: how far each will move the cursor
     for (let i = 0; i < 40; i++) {
       const c = window.fourLooks.cursor && window.fourLooks.cursor();
-      if (!c) break;
-      const ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
-      if (Math.abs(ex) * innerWidth < r.width * 0.2 && Math.abs(ey) * innerHeight < r.height * 0.2) break;
+      if (!c || (done && done())) break;
+      let ex = tx - c[0] / innerWidth, ey = ty - c[1] / innerHeight;
+      if (Math.abs(ex) * innerWidth < r.width * AIM_OK && Math.abs(ey) * innerHeight < r.height * AIM_OK) break;
+      const now = performance.now();
+      while (sent.length && sent[0].until <= now) sent.shift();
+      for (const m of sent) { ex -= m.dx; ey -= m.dy; }                    // already on its way to the screen
       if (LAZY && document.querySelector(".hover") === el) break;        // most people stop as soon as the key lights up
       const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1;   // people adapt to how far the cursor travels
       // People correct an aim in one or two quick moves, not by creeping: most of the error at once.
       head.x += (0.6 * ex) / g; head.y += (0.6 * ey) / g;
+      sent.push({ until: now + SEE_MS, dx: 0.6 * ex, dy: 0.6 * ey });
       await sleep(HZ * 4);
     }
     await sleep(260);
@@ -125,9 +137,10 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
   async function rowHop() { const y0 = head.y; await lookAt(head.x, y0 + 0.17, 160); await lookAt(head.x, y0, 160); await sleep(300); }
   // A person only does the press move once the key they want is highlighted.
   const tally = { presses: 0, reAims: 0, gaveUp: 0, wrongKey: 0 };
+  // The keyboard's own keys come first, so the letter o means the O key, not a guess that happens to read "o".
   const findKey = (key) => {
-    const all = [...document.querySelectorAll("[data-key]")];
-    return all.find((e) => e.dataset.key === key || e.dataset.word === key)
+    const all = [...document.querySelectorAll("#keys [data-key]"), ...document.querySelectorAll("[data-key]")];
+    return all.find((e) => e.dataset.key === key) || all.find((e) => e.dataset.word === key)
       || (key.length === 1 ? all.find((e) => e.dataset.key.startsWith("g:") && e.dataset.key.slice(2).includes(key)) : undefined);   // big keys hold several letters
   };
   async function press(key) {
