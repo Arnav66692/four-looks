@@ -81,6 +81,7 @@ export class HeadPointer {
     this.lead = LEAD_ON ? LEAD_S : 0; this.vel = [0, 0]; this.leadPrev = null; this.leadT = 0;
     this.offset = [0, 0];      // set only by a deliberate recenter, in screen units
     this.steady = 1;           // above 1 while a key is locked: small head tremor moves the cursor less
+    this.past = { left: 0, right: 0, up: 0, down: 0 };
   }
   get ready() { return !!(this.map || this.range); }
 
@@ -145,6 +146,8 @@ export class HeadPointer {
     const clamp = (x) => Math.min(1, Math.max(0, x));
     const calm = (k) => this.steady * (1 + (EDGE_STEADY - 1) * edginess(raw[k]));
     const f = [this.fx.filter(raw[0], calm(0)), this.fy.filter(raw[1], calm(1))];
+    // How far past the edge of the window the head points, per side, in screen units (0 when inside).
+    this.past = { left: Math.max(0, -f[0]), right: Math.max(0, f[0] - 1), up: Math.max(0, -f[1]), down: Math.max(0, f[1] - 1) };
     // Look-ahead: while the head is clearly moving, draw the cursor a little ahead along its path.
     // A cursor that trails the head makes people turn too far and swing back.
     const dt = this.leadT ? Math.max((t - this.leadT) / 1000, 1e-3) : 0;

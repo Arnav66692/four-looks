@@ -6,6 +6,7 @@ export const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const LOG10 = Math.log(10);
 const OOV_PRIOR = -7.0;          // log10 word-model score given to a word the dictionary lacks
 const LEARNED_PRIOR = -3.5;      // log10 score of a word from the person's own list
+const MIXED_CASE = new Map(["YouTube", "iPhone", "iPad", "eBay", "MacBook", "GitHub", "LinkedIn", "PayPal", "ChatGPT", "WiFi", "TikTok", "JavaScript", "PowerPoint", "FaceTime", "iMessage", "AirPods", "McDonald"].map((w) => [w.toLowerCase(), w]));
 const WEB_ENDS = new Set(["com", "org", "net", "edu", "gov", "io", "ai", "co", "app", "dev", "us", "uk"]);
 const USED_BOOST = 0.35;      // how much a word this person has used before rises (log10 units per tenfold use)
 const ADDED_APOSTROPHE = -1.0;   // cost of a dictionary word adding an apostrophe you did not type
@@ -136,11 +137,24 @@ export class KeyTyper {
   deliberateCase() {
     const ups = this.letterSlots().map((p) => p.upper);
     const n = ups.filter(Boolean).length;
-    return (n > 1 && n === ups.length) || ups.slice(1).some(Boolean);
+    if (n > 1 && n === ups.length) return true;                 // ALL CAPS is on purpose
+    if (!ups.slice(1).some(Boolean)) return false;              // at most a leading capital
+    // A capital in the middle. Known mixed-case names (YouTube, iPhone) and words the dictionary does not
+    // know are kept as typed. An ordinary dictionary word with one capital inside it (fInding) is a
+    // slipped shift, and is treated as lower case.
+    const typed = this.exactCase(this.typedWord()), lower = typed.toLowerCase();
+    const stem = typed.replace(/'s$/i, "");
+    if (MIXED_CASE.get(stem.toLowerCase()) === stem) return true;
+    return this.dec.idOf(lower) < 0 && !this.learned.has(lower);
+  }
+  // The capitals that count: all of them when the case is on purpose, otherwise only a leading one.
+  caps() {
+    const ups = this.letterSlots().map((p) => p.upper);
+    return this.deliberateCase() ? ups : ups.map((u, i) => i === 0 && u);
   }
 
   caseLike(word) {
-    const ups = this.letterSlots().map((p) => p.upper);
+    const ups = this.caps();
     if (ups.length > 1 && ups.every(Boolean)) return word.toUpperCase();
     let k = 0;
     const out = [...word.toLowerCase()].map((c) => (/[a-z]/.test(c) ? (ups[k++] ? c.toUpperCase() : c) : c)).join("");
@@ -314,6 +328,7 @@ export class KeyTyper {
     if (this.pending.length && word === this.exactCase(this.typedWord()) && this.dec.idOf(word.toLowerCase()) < 0) this.learn([word]);
     this.pending = [];
     this.noteUse(word);
+    if (this.committed && !/\s$/.test(this.committed)) this.committed += " ";      // never glue a picked word onto the one before
     this.committed += word + " ";
     this.raw = false;
     if (this.shift === "once") this.shift = "off";

@@ -102,8 +102,9 @@ export function startSimFace(onFrame, { cueName = () => "smile" } = {}) {
       if (Math.abs(ex) * innerWidth < r.width * 0.2 && Math.abs(ey) * innerHeight < r.height * 0.2) break;
       if (LAZY && document.querySelector(".hover") === el) break;        // most people stop as soon as the key lights up
       const g = (window.fourLooks.reach && window.fourLooks.reach()) || 1;   // people adapt to how far the cursor travels
-      head.x += (0.3 * ex) / g; head.y += (0.3 * ey) / g;
-      await sleep(HZ * 3);
+      // People correct an aim in one or two quick moves, not by creeping: most of the error at once.
+      head.x += (0.6 * ex) / g; head.y += (0.6 * ey) / g;
+      await sleep(HZ * 4);
     }
     await sleep(260);
   }

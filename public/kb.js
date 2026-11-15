@@ -16,7 +16,6 @@ const REACH_KEY = "fourlooks.reach.v3";
 const TUNE_KEY = "fourlooks.tune.v2";                   // sensitivity and smoothing found by the tuning run
 const REACH_STEPS = [0.7, 1, 1.3, 1.6, 2];                  // extra amplification, so smaller head turns cover the keyboard
 const SIGMA = 0.45;                                     // press spread, in key widths
-const SIGMA_SURE = 0.3;                                 // spread for a hold press, which is deliberate
 const GAP = 0.2;                                        // the gap between keys belongs to the nearest key within this (key sizes)
 const ROW_HAIR = 0.28;                                  // and this much of its height against a slip to another row
 const EDGE_HAIR = 0.08;                                 // an unlocked key keeps this much past its edge, to stop flicker on a boundary
@@ -26,6 +25,14 @@ const CORE_LOCKED = 0.3;                                // a locked key gives wa
 const LOCK_STEADY = 1.8;                                // while a key is locked, head tremor this much larger is ignored
 const VOTE_MS = 350;                                    // a press goes to the key you were on most in this window
 let holdEl = null, holdP = 0, holdT = 0, lockedEl = null, pressedEl = null, offSince = null;
+const SLOW_KEYS = new Set(["shift", "123", "abc", "menu", "mouse", "undo", "fix", "speak", "send", "grokmode"]);
+const STILL_MS = 150;                                   // settled means: in the last this many ms
+const STILL_MOVE = 0.12;                                //   the cursor moved less than this many key widths (his own resting steps: median 0.05)
+const FAST_MOVE = 0.45;                                 // moving this many key widths in that time, the fill is at its slowest
+const MOVING_RATE = 0.15;                               // the slowest the fill ever runs
+const fading = new Map();                               // keys you have left, with what remains of their fill
+const holdAt = { x: 0, y: 0, n: 0 };                    // where the cursor rested while the current key filled
+const SLOW_HOLD = 1.5;                                  // a slow key needs this many times the hold of a letter
 const REARM_MS = 250;                                   // a pressed key can press again once the cursor has been off it this long
 const HOLD_DRAIN = 1.6;                                 // a hold drains this many times slower than it builds
 const SWITCH_MS = 40;                                   // a new key takes the selection after the pointer has been in it this long
@@ -123,11 +130,11 @@ function loadReach() { try { return Number(JSON.parse(localStorage.getItem(REACH
 function loadHold() { try { return JSON.parse(localStorage.getItem(HOLD_KEY)) === true; } catch { return false; } }
 function loadWords() { try { return JSON.parse(localStorage.getItem(WORDS_KEY)) || []; } catch { return []; } }
 let promptTimer = 0;
-function prompt(text, big = false) {      // a quiet line that fades once read
+function prompt(text, big = false, stay = false) {      // a quiet line that fades once read, unless told to stay
   const el = $("prompt");
   el.textContent = text; el.classList.toggle("big", big); el.classList.add("show");
   clearTimeout(promptTimer);
-  if (!big) promptTimer = setTimeout(() => el.classList.remove("show"), 5000);
+  if (!big && !stay) promptTimer = setTimeout(() => el.classList.remove("show"), 5000);
 }
 
 // ---------- sound: one short soft tick per press ----------
@@ -269,7 +276,8 @@ function keepFix(how) {
 
 function acceptGhost(how) {
   if (how === "nod" && study.capture) { study.onNod?.(performance.now()); return true; }
-  if (how === "nod" && grok.busy) { answerGrok(true); return true; }       // while Grok works, a nod only ever means yes
+  if (how === "nod" && grok.busy) { answerGrok(true); return true; }
+  if (how === "nod" && takeGrokOffer()) return true;       // while Grok works, a nod only ever means yes
   if (how === "nod" && mode === "mouse") return true;        // a nod moves the cursor, so it does not click: the mouth does
   if (!typer || calibrating) return false;
   if (pendingFix) { applyFix(); return true; }
@@ -313,7 +321,7 @@ let pendingFix = null;
 let lastPress = null;                  // top letters of the last key press, for the admin view
 async function askFix() {
   if (pendingFix) { applyFix(); return; }
-  typer.commitWord();
+  endWord();
   const text = typer.text().trim();
   if (!text) return;
   prompt("Checking with Grok.");
@@ -373,10 +381,7 @@ function press(el, x, y, sure = false) {
     lastPress = [...group].map((c) => [c, 1 / group.length]);
     record("letter", { key: k });
   } else if (k.length === 1 && LETTERS.includes(k)) {
-    // A hold press is deliberate: the key filled while you watched it. It counts as that key, from its
-    // centre and with a tight spread, so the word guesser rarely overrules a letter you clearly chose.
-    const kr = el.getBoundingClientRect();
-    const probs = sure ? letterProbs(kr.left + kr.width / 2, kr.top + kr.height / 2, SIGMA_SURE) : letterProbs(x, y);
+    const probs = letterProbs(x, y);
     lastPress = probs.map((p, i) => [LETTERS[i], p]).sort((a, b) => b[1] - a[1]).slice(0, 3);
     typer.letter(probs);
     record("letter", { key: k });
@@ -399,8 +404,13 @@ function press(el, x, y, sure = false) {
   if (sentNow && autoShown) setMode("mouse", "sent");      // the keyboard came up for a text box: step back once the message is sent
 }
 
-function speak(andClear) {
+// A key that ends the word without a space (fix, speak) still leaves one, so the next word never glues on.
+function endWord() {
   typer.commitWord();
+  if (typer.committed && !/\s$/.test(typer.committed)) typer.committed += " ";
+}
+function speak(andClear) {
+  endWord();
   const text = typer.text().trim();
   if (!text) return;
   speechSynthesis.cancel();
@@ -409,7 +419,16 @@ function speak(andClear) {
   if (andClear) typer.clear();
 }
 // ---------- live typing into the app in front (desktop app only) ----------
-const out = window.fourLooksOut;
+// In the simulator a stand-in records exactly what would have been typed into the app in front.
+const fakeApp = { text: "", returns: 0, calls: 0 };
+const fakeOut = {
+  edit: async (deletes, text) => { fakeApp.calls++; fakeApp.text = fakeApp.text.slice(0, fakeApp.text.length - deletes) + text; return { ok: true }; },
+  type: async (text) => { fakeApp.calls++; fakeApp.text += text; return { ok: true }; },
+  enter: async () => { fakeApp.returns++; fakeApp.text += "\n"; return { ok: true }; },
+  send: async (text) => { fakeApp.text += `${text}\n`; fakeApp.returns++; return { ok: true }; },
+};
+window.fourLooks.app = fakeApp;
+const out = window.fourLooksOut || (params.get("sim") && params.get("app") ? fakeOut : undefined);
 const LIVE = !!out?.edit;
 let mirrored = "";
 let queue = Promise.resolve();
@@ -546,9 +565,16 @@ function inCore(el, x, y) {
 }
 const onlyMenu = (el) => (el && el.closest("#menu") ? el : null);
 function setFill(el, p) { if (el) el.style.setProperty("--p", String(p)); }
-function movePointer(x, y, t) {
+// Looking well past the side or the bottom of the keyboard (at the laptop, at someone, away) is resting,
+// not aiming. In his 3:12 PM run undo fired three times and shift once while he rested past the edge,
+// because the edge keys reach outward. They still do, but only this far.
+const AWAY = 0.05;                     // past the window edge by this much (after edge softening) counts as away
+let awayNow = false;
+function movePointer(x, y, t, past = null) {
   cursorAt = [x, y];
-  let el = pickHover(x, y, t);
+  awayNow = !!past && Math.max(past.left, past.right, past.down) > AWAY;
+  $("cursor").classList.toggle("away", awayNow);
+  let el = awayNow ? null : pickHover(x, y, t);
   if (el !== hoverEl && hoverEl && el) {            // passing over a key is not selecting it: it must hold for a moment
     if (el !== switchTo) { switchTo = el; switchSince = t; }
     if (t - switchSince < SWITCH_MS) el = hoverEl;
@@ -564,12 +590,24 @@ function movePointer(x, y, t) {
     hoverEl = el; hoverSince = t; armed = true;
     el?.classList.add("hover");
   }
-  // Hold to press: the hold builds while you are on a key and drains slowly when you slip off it,
-  // so a brief slip does not start you again from zero.
+  // Hold to press. Each key keeps its own fill. The key under the cursor fills, and a key you have left
+  // drains slowly in the background, so a brief slip costs little and coming back picks up where it was.
+  // A key you move to starts filling at once: it never waits for the last one to empty.
   const dtHold = Math.min(120, Math.max(0, t - holdT)); holdT = t;
   let progress = 0;
   if (!calibrating && holdToPress && !study.capture) {
     if (holdEl && !holdEl.isConnected) { holdEl = null; holdP = 0; }
+    if (hoverEl !== holdEl) {
+      if (holdEl && holdP > 0) fading.set(holdEl, { p: holdP, x: holdAt.x, y: holdAt.y, n: holdAt.n });
+      const back = hoverEl ? fading.get(hoverEl) : null;
+      if (back) fading.delete(hoverEl);
+      holdEl = hoverEl; holdP = back ? back.p : 0;
+      holdAt.x = back ? back.x : 0; holdAt.y = back ? back.y : 0; holdAt.n = back ? back.n : 0;
+    }
+    for (const [el, f] of fading) {
+      f.p -= dtHold / (DWELL * HOLD_DRAIN);
+      if (f.p <= 0 || !el.isConnected) { setFill(el, 0); fading.delete(el); } else setFill(el, f.p);
+    }
     // A key that was just pressed stays quiet until the cursor has clearly left it, so wobble on its edge cannot repeat it.
     if (pressedEl) {
       if (hoverEl === pressedEl) offSince = null;
@@ -577,21 +615,33 @@ function movePointer(x, y, t) {
       else if (t - offSince > REARM_MS) pressedEl = null;
     }
     const quiet = hoverEl === pressedEl && hoverEl?.dataset.key !== "⌫";
-    if (hoverEl && hoverEl === holdEl && !quiet) holdP += dtHold / DWELL;
-    else {
-      holdP -= dtHold / (DWELL * HOLD_DRAIN);
-      if (holdP <= 0) { setFill(holdEl, 0); holdEl = hoverEl; holdP = 0; }
+    if (holdEl && !quiet) {
+      // The fill runs at full speed while the head has settled and slows while it is still moving, so a key
+      // you are crossing, or drifting onto on the way to its neighbour, barely fills. It never stops outright:
+      // with a strong tremor the fill is slower, not stuck (a hard stop stalled keys in the tremor run).
+      const then = history.find((h) => t - h.t <= STILL_MS) || history[history.length - 1];
+      const moved = then ? Math.hypot(x - then.x, y - then.y) / keyWidth : 0;
+      const rate = moved <= STILL_MOVE ? 1 : Math.max(MOVING_RATE, 1 - ((moved - STILL_MOVE) / (FAST_MOVE - STILL_MOVE)) * (1 - MOVING_RATE));
+      // Keys that change things instead of typing (shift, undo, fix, send and the like) take half as long again.
+      holdP += (rate * dtHold) / (DWELL * (SLOW_KEYS.has(holdEl.dataset.key) ? SLOW_HOLD : 1));
+      holdAt.x += rate * x; holdAt.y += rate * y; holdAt.n += rate;
     }
     if (holdEl && holdP >= 1) {
       const r = holdEl.getBoundingClientRect();
-      press(holdEl, Math.min(r.right, Math.max(r.left, x)), Math.min(r.bottom, Math.max(r.top, y)), true);
+      // The press is read from the average spot the cursor rested on while the key filled.
+      const px = holdAt.n ? holdAt.x / holdAt.n : x, py = holdAt.n ? holdAt.y / holdAt.n : y;
+      holdAt.x = holdAt.y = holdAt.n = 0;
+      press(holdEl, Math.min(r.right, Math.max(r.left, px)), Math.min(r.bottom, Math.max(r.top, py)), true);
       pressedEl = holdEl; offSince = null;   // backspace is the one key that repeats while you stay on it
       holdP = 0; hoverSince = t;
     }
     progress = Math.max(0, Math.min(1, holdP));
     setFill(holdEl, progress);
-  } else if (holdEl) { setFill(holdEl, 0); holdEl = null; holdP = 0; }
-  if (hoverEl !== holdEl) setFill(hoverEl, 0);
+  } else if (holdEl || fading.size) {
+    setFill(holdEl, 0); holdEl = null; holdP = 0;
+    for (const el of fading.keys()) setFill(el, 0);
+    fading.clear();
+  }
   const locked = !calibrating && isLocked(t);
   if (lockedEl && (lockedEl !== hoverEl || !locked)) { lockedEl.classList.remove("locked"); lockedEl = null; }
   if (locked && hoverEl && lockedEl !== hoverEl) { lockedEl = hoverEl; lockedEl.classList.add("locked"); }
@@ -730,7 +780,10 @@ out?.onAgent?.((ev) => {
     grok.confirm = ev.id; tick(); dockHint(`${ev.text}  Nod = yes. Shake = no.`);
     if (grokAuto != null) setTimeout(() => answerGrok(grokAuto), 400);      // self-test only: no face to nod
   }
-  else if (ev.type === "step") dockHint(ev.action === "thinking" ? "Grok is thinking." : `Grok: ${ev.reason || ev.action}`);
+  else if (ev.type === "step") {
+    dockHint(ev.action === "thinking" ? "Grok is thinking." : `Grok: ${ev.reason || ev.action}`);
+    if (ev.action !== "thinking") record("grok-step", { action: ev.action, reason: String(ev.reason || "").slice(0, 120) });
+  }
 });
 // Three quick blinks (or the eye icon) make Grok listen. The text box becomes the command line and the
 // send key becomes "do it". Nothing typed here goes to the app in front. Three blinks again cancels.
@@ -760,8 +813,32 @@ function detectTripleBlink(f) {
   if (len < BLINK_MIN_MS || len > BLINK_MAX_MS || f.t - blink3.faceSince < BLINK_WARMUP_MS) { blink3.times = []; showBlinks(0); return; }
   blink3.times = [...blink3.times.filter((t) => f.t - t < BLINK_SPAN_MS), f.t];
   showBlinks(blink3.times.length);
-  if (blink3.times.length >= 3) { blink3.times = []; setTimeout(() => showBlinks(0), 400); toggleGrokMode("three blinks"); }
+  if (blink3.times.length >= 3) { blink3.times = []; setTimeout(() => showBlinks(0), 400); offerGrok(); }
 }
+// Three blinks alone never switch modes: people blink in bursts. In his 3:12 PM run Grok mode came on
+// without him meaning it, and two and a half minutes of typing never reached Gmail. Now three blinks only
+// ask, and a nod within a few seconds says yes. Three blinks while Grok listens cancel it straight away.
+const OFFER_MS = 4000;
+let grokOffer = 0;
+function offerGrok() {
+  if (grok.busy) { stopGrok("three blinks"); return; }
+  if (grokMode) { toggleGrokMode("three blinks"); return; }
+  if (calibrating || !typer) return;
+  grokOffer = performance.now();
+  tick();
+  document.body.classList.add("grokoffer");
+  prompt("Three blinks seen. Nod to wake Grok.", false, true);
+  record("grok-offer", {});
+  setTimeout(() => { if (grokOffer && performance.now() - grokOffer >= OFFER_MS - 50) { grokOffer = 0; document.body.classList.remove("grokoffer"); prompt("Typing as normal."); } }, OFFER_MS);
+}
+function takeGrokOffer() {
+  if (!grokOffer || performance.now() - grokOffer > OFFER_MS) return false;
+  grokOffer = 0;
+  document.body.classList.remove("grokoffer");
+  enterGrokMode("three blinks and a nod");
+  return true;
+}
+window.fourLooks.grokOffer = () => !!grokOffer;
 async function enterGrokMode(why) {
   if (grokMode || grok.busy || calibrating || !typer) return;
   grokFrom = mode;
@@ -772,7 +849,7 @@ async function enterGrokMode(why) {
   document.body.classList.add("grokcmd");
   record("grok-mode", { on: true, why });
   tick();
-  prompt("Grok is listening. Type what you want done, then press do it. Three blinks to cancel.");
+  prompt("GROK IS LISTENING. This is not typed into your app. Type what you want done, press do it. Three blinks to cancel.", false, true);
   updateKeys(); renderText(); updatePrior();
 }
 function exitGrokMode() {
@@ -791,6 +868,9 @@ function toggleGrokMode(why) {
   if (grokFrom === "mouse") setMode("mouse", "grok cancelled");
 }
 window.fourLooks.grokMode = () => grokMode;
+window.fourLooks.setting = (id) => runSetting(id);
+window.fourLooks.away = () => awayNow;
+window.fourLooks.hold = () => ({ key: holdEl?.dataset.key || null, p: +holdP.toFixed(2), pressed: pressedEl?.dataset.key || null, fading: [...fading].map(([el, f]) => [el.dataset.key, +f.p.toFixed(2)]), dwell: DWELL });
 // Things the app does itself, at once, with no model: say them to Grok or pick them from the top row.
 const APP_COMMANDS = [
   [/^(help|guide|what can (you|i) do)$/i, () => toggleHelp(true)],
@@ -868,6 +948,8 @@ window.fourLooks.grokGoal = async (goal, autoAnswer = null) => {
 // Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
 // two never counts: a nod has to dip at least NOD_AMP of that range and be back within NOD_MS.
 const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, last: 0 };
+let nodCount = 0;                      // nods recognised this session, for the test suite
+window.fourLooks.nods = () => nodCount;
 function detectNod(f) {
   const raw = pointer.raw(f.pose, 1);
   if (!raw) return;
@@ -880,9 +962,15 @@ function detectNod(f) {
     return;
   }
   nod.peak = Math.max(nod.peak, dy);
-  const sideways = Math.abs(x - nod.restX) > 0.5 * Math.max(nod.peak, NOD_START);
+  // A nod may wander sideways by half its own depth, and never less than 0.12 of the range: his head
+  // wobbles about 0.07 of the range side to side at rest, which used to cancel a nod as it began.
+  const sideways = Math.abs(x - nod.restX) > Math.max(0.5 * nod.peak, 0.12);
   if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; return; }   // a real move
-  if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; acceptGhost("nod"); }
+  if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; nodCount++; acceptGhost("nod"); return; }
+  // A small blip that has already come back up was tremor, not the start of a nod. Go straight back to
+  // waiting, so it cannot block a real nod that begins a moment later (it used to hold the detector for
+  // up to half a second, and a nod that started inside that window was missed).
+  if (nod.peak < NOD_AMP && dy < 0.5 * NOD_START) nod.state = "rest";
 }
 
 // ---------- shake: one quick left-right flick of the head steps the grey guess to the next option ----------
@@ -944,7 +1032,7 @@ function onFrame(f) {
     detectShake(f);
   } else if (!closing) {
     const p = pointer.point(f.pose, f.t);
-    if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t);
+    if (p) movePointer(p[0] * innerWidth, p[1] * innerHeight, f.t, pointer.past);
   } else if (cursorAt) movePointer(cursorAt[0], cursorAt[1], f.t);
   detectNod(f);
   detectFlick(f);
