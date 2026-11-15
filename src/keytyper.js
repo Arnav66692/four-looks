@@ -8,6 +8,10 @@ const OOV_PRIOR = -7.0;          // log10 word-model score given to a word the d
 const LEARNED_PRIOR = -3.5;      // log10 score of a word from the person's own list
 const MIXED_CASE = new Map(["YouTube", "iPhone", "iPad", "eBay", "MacBook", "GitHub", "LinkedIn", "PayPal", "ChatGPT", "WiFi", "TikTok", "JavaScript", "PowerPoint", "FaceTime", "iMessage", "AirPods", "McDonald"].map((w) => [w.toLowerCase(), w]));
 const WEB_ENDS = new Set(["com", "org", "net", "edu", "gov", "io", "ai", "co", "app", "dev", "us", "uk"]);
+const RARE_WORD = -4.6;       // log10 frequency below which a word the list knows is treated as a likely misspelling.
+                              // The list holds 62,760 tokens and many are junk: dor, bok, hed, wach, freind all count as words.
+const JUNK_WORD = -5.4;       // below this a listed word is almost surely a junk token (dor, bok, hed, freind), not a word someone meant.
+                              // Real but uncommon words sit above it: pharmacy, ambulance, wheelchair, boba.
 const EDIT_COST = 2.0;        // what one spelling edit costs a suggestion (log10 units)
 const SPELL_LETTERS = "abcdefghijklmnopqrstuvwxyz'";
 // Every string one edit away: a letter dropped, two letters swapped, a letter changed, a letter added.
@@ -40,6 +44,7 @@ export class KeyTyper {
     this.used = new Map();   // how often this person has used each word: their words rise in the guesses
     this.undoStack = [];
     this.lastFix = null;     // { from, to } when autocorrect last changed a word
+    this.rankTop = null;     // { typed, at, word }: Grok's pick for these letters at this place in the text
   }
 
   // Undo support: call save() before a change, undo() to step back.
@@ -252,14 +257,57 @@ export class KeyTyper {
     // and in his own sessions 8 of 12 words picked while typing were longer than the letters typed.
     // When the letters typed are not a word at all, the closest real spellings lead ("wter" shows water).
     const lower = typed.toLowerCase();
-    const unknown = this.dec.idOf(lower) < 0 && !this.learned.has(lower);
+    const unknown = this.doubtful(lower);
     const fixes = this.spell(3).map((w) => this.caseLike(w));
     const order = (unknown && fixes.length
       ? [fixes[0], longer[0], best, fixes[1], fixes[2], longer[1], ...others, typed]
       : [longer[0], best, longer[1], fixes[0], longer[2], ...others, typed]).filter(Boolean);
     const out = [...new Set(order)].slice(0, n + 1);
     if (!out.includes(typed) && typed !== best) out[out.length - 1] = typed;
+    return this.withRank(out, typed);
+  }
+
+  // Letters that are not a word, or that the list only knows as a rare token, are probably a misspelling.
+  // A word the person chose to keep is never doubted. Having used a word before excuses only a real, rare
+  // word: a typo that was once sent as typed is still a typo.
+  doubtful(lower) {
+    if (this.learned.has(lower)) return false;
+    const id = this.dec.idOf(lower);
+    if (id < 0) return true;
+    return !this.used.has(lower) && this.dec.uni[id] < RARE_WORD;
+  }
+
+  // True while the letters could still be the start of a real word: the person is probably mid-word, not
+  // misspelling. ("wat" may become water, "pharm" may become pharmacy. "wter" cannot become anything.)
+  mayGrow(lower) {
+    this.growth ||= this.dec.words.filter((w, id) => this.dec.uni[id] >= JUNK_WORD);
+    const starts = (w) => w.length > lower.length && w.startsWith(lower);
+    return this.growth.some(starts) || [...this.learned].some(starts) || [...this.used.keys()].some(starts);
+  }
+
+  // Worth a paid question: letters the list does not know, or knows only as a junk token. A real word,
+  // however uncommon, is not sent, and neither is anything the person has used or kept.
+  worthAsking(lower) {
+    if (this.learned.has(lower) || this.used.has(lower)) return false;
+    const id = this.dec.idOf(lower);
+    return id < 0 || this.dec.uni[id] < JUNK_WORD;
+  }
+
+  // Grok's pick for these exact letters in this exact place goes first, which is the bold guess in the
+  // centre. The other guesses keep their order and the letters as typed always stay on offer.
+  // This was In A Park's idea: let Grok choose among the dictionary's spelling candidates by the sentence.
+  withRank(list, typed) {
+    const r = this.rankTop;
+    if (!r || r.typed !== typed.toLowerCase() || r.at !== this.committed.length) return list;
+    const out = [this.caseLike(r.word), ...list.filter((w) => w.toLowerCase() !== r.word)].slice(0, Math.max(list.length, 2));
+    if (!out.includes(typed)) out[out.length - 1] = typed;
     return out;
+  }
+
+  // The real words Grok may choose among: the guesses on screen plus a few more spelling fixes.
+  rankCandidates(max = 8) {
+    const real = (w) => /^[a-z']+$/.test(w) && (this.dec.idOf(w) >= 0 || this.learned.has(w));
+    return [...new Set([...this.suggestions(4).map((w) => w.toLowerCase()), ...this.spell(6)])].filter(real).slice(0, max);
   }
 
   commitWord() {

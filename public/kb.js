@@ -118,8 +118,8 @@ setInterval(() => {                        // every session is saved on this com
 window.fourLooks = { log };
 
 let typer = null;
-const LAYOUT_KEY = "fourlooks.layout.v4";               // v4: qwerty is the default, by his choice
-const LETTER_LAYOUTS = ["head", "big", "abc"];        // head-arranged letters, boxes (phone-pad order), and QWERTY
+const LAYOUT_KEY = "fourlooks.layout.v5";               // v5: everyone starts on qwerty again. In A Park's copy had boxes saved and she took it for the default.
+const LETTER_LAYOUTS = ["abc", "head", "big"];        // QWERTY first, then head-arranged letters, then boxes (phone-pad order)
 const LAYOUT_NAME = { head: "head", abc: "qwerty", big: "boxes" };
 let letters = (() => { try { const v = JSON.parse(localStorage.getItem(LAYOUT_KEY)); return LETTER_LAYOUTS.includes(v) ? v : "abc"; } catch { return "abc"; } })();
 let layer = letters;
@@ -234,12 +234,12 @@ function letterProbs(x, y, sigma = SIGMA) {
 }
 
 // ---------- metrics: speed and effort, from what was actually typed ----------
-const stats = { produced: 0, presses: 0, undone: 0, activeMs: 0, lastAt: 0, fixes: 0 };
+const stats = { produced: 0, presses: 0, undone: 0, activeMs: 0, lastAt: 0, fixes: 0, message: 0 };      // message: selections since the last send
 function countInput(kind, before) {
   const now = Date.now();
   if (stats.lastAt) stats.activeMs += Math.min(now - stats.lastAt, IDLE_MS);
   stats.lastAt = now;
-  stats.presses++;
+  stats.presses++; stats.message++;
   if (kind === "undo") stats.undone++;
   const grew = typer.text().length - before;
   if (grew > 0) stats.produced += grew;
@@ -256,7 +256,8 @@ function metrics() {
 }
 function renderStats() {
   const m = metrics();
-  $("stats").textContent = stats.presses ? `${m.wpm} wpm · ${m.keysSaved}% keys saved · ${m.undone}% undone` : "";
+  // Selections: every key, guess, nod and undo the person made (In A Park asked for the count).
+  $("stats").textContent = stats.presses ? `${m.presses} selections · ${m.chars} characters · ${m.wpm} wpm · ${m.keysSaved}% keys saved · ${m.undone}% undone` : "";
 }
 window.fourLooks.metrics = metrics;
 window.fourLooks.cursor = () => cursorAt;
@@ -424,7 +425,67 @@ function press(el, x, y, sure = false) {
   renderText();
   updatePrior();
   mirror();
+  askRank();
   if (sentNow && autoShown) setMode("mouse", "sent");      // the keyboard came up for a text box: step back once the message is sent
+}
+
+// ---------- Grok guesses (In A Park's idea) ----------
+// When the letters typed are not a word, Grok is shown the sentence so far and the dictionary's spelling
+// candidates, and its first choice becomes the bold guess in the centre. It is OFF until switched on in
+// the dots menu, because it sends what you are typing to xAI. In a pilot of 31 misspelled sentences
+// (pilots/grok-rank) its first choice was right in 30, in about 0.4 s. The app's own order was right in 26
+// before the pilot exposed junk tokens in the word list, and in 29 once that was fixed, so Grok adds a
+// little. If the call fails, takes too long or answers with different words, the app's own order stays.
+// It only asks about letters that cannot grow into an ordinary word, so an unfinished word costs no call.
+const RANK_KEY = "fourlooks.rank.v1", RANK_WAIT_MS = 350;      // it asks once you pause this long after a letter
+let rankOn = (() => { try { return JSON.parse(localStorage.getItem(RANK_KEY)) === true; } catch { return false; } })();
+let rankTimer = 0, rankHeld = null, rankDead = "", chipsOffSince = 0, pointerT = 0;
+const RANK_OFF_MS = 500;       // the guesses may change order only once the cursor has been off the guess row this long (tremor slips are shorter)
+const rankAnswers = new Map();                                  // sentence -> Grok's pick. null while the call is in flight. One call a sentence.
+const rankPlace = () => `${typer.committed.length}|${typer.typedWord().toLowerCase()}`;
+function askRank() {
+  clearTimeout(rankTimer);
+  if (!rankOn || rankDead || grokMode || !typer || typer.raw || typer.groupMode()) return;
+  const typed = typer.typedWord().toLowerCase();
+  // An ordinary word needs no ranking, and neither do letters that may still grow into one (an unfinished word).
+  if (typed.length < 2 || !/^[a-z']+$/.test(typed) || !typer.worthAsking(typed) || typer.mayGrow(typed)) return;
+  const candidates = typer.rankCandidates();
+  const sentence = `${typer.committed}${typed}`.trim().split(/\s+/).slice(-12).join(" "), key = sentence.toLowerCase();
+  if (candidates.length < 2) return;
+  const place = rankPlace(), at = typer.committed.length;
+  if (rankAnswers.has(key)) {                  // asked before: use the saved answer (back after a slip and a backspace), never a second call
+    const word = rankAnswers.get(key);
+    if (word) offerRank({ place, typed, at, word });
+    return;
+  }
+  rankTimer = setTimeout(async () => {
+    rankAnswers.set(key, null);
+    try {
+      const r = await (await fetch("/api/rank", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sentence, candidates }) })).json();
+      if (!r.ok) {
+        rankAnswers.delete(key);               // a failed call may be tried again if you come back to these letters
+        if (/no key|cap reached/.test(r.error || "")) { rankDead = r.error; prompt(r.error === "no key" ? "Grok guesses need an xAI key in .env." : `Grok guesses stopped: ${r.error}.`); refreshMenu(); }
+        record("rank", { ok: false, error: r.error || "failed" });
+        return;
+      }
+      const word = r.ranked[0].toLowerCase();
+      rankAnswers.set(key, word);
+      record("rank", { typed, top: word, ms: r.ms, was: candidates[0] });
+      offerRank({ place, typed, at, word });
+    } catch { rankAnswers.delete(key); record("rank", { ok: false, error: "offline" }); }
+  }, RANK_WAIT_MS);
+}
+// The guesses never change order under the cursor. An answer goes in only when the cursor has been off
+// the guess row for half a second. If it is on the row, or slipped off it a moment ago, the answer waits.
+// Otherwise the word under the cursor would change while you were still aiming at it.
+function offerRank(pick) {
+  if (!typer || pick.place !== rankPlace()) { if (rankHeld === pick) rankHeld = null; return; }      // you typed on: the answer is for letters that are gone
+  if (hoverEl?.closest("#chips") || chipsOffSince == null || pointerT - chipsOffSince <= RANK_OFF_MS) { rankHeld = pick; return; }
+  rankHeld = null;
+  typer.rankTop = { typed: pick.typed, at: pick.at, word: pick.word };
+  for (const el of $("chips").children) { fading.delete(el); setFill(el, 0); }      // a part-filled guess must not finish on a different word
+  renderText();
+  if (typer.suggestions(4)[0]?.toLowerCase() === pick.word) prompt(`Grok suggests ${pick.word}.`);
 }
 
 // A key that ends the word without a space (fix, speak) still leaves one, so the next word never glues on.
@@ -474,7 +535,7 @@ function send() {
     mirror();
     const text = typer.text().trim();
     queue = queue.then(() => out.enter());
-    record("send", { text, chars: text.length, to: "app" });
+    record("send", { text, chars: text.length, to: "app", selections: stats.message }); stats.message = 0;
     prompt(text ? `Sent: ${text}` : "Pressed return.");
     typer.clear(); mirrored = "";
     updateKeys(); renderText();
@@ -485,7 +546,7 @@ function send() {
   const text = typer.text().trim();
   if (!text) return;
   window.fourLooksOut.send(text).then((r) => {
-    if (r?.ok) { record("send", { text, chars: text.length, to: "app" }); prompt(`Sent: ${text}`); typer.clear(); updateKeys(); renderText(); }
+    if (r?.ok) { record("send", { text, chars: text.length, to: "app", selections: stats.message }); stats.message = 0; prompt(`Sent: ${text}`); typer.clear(); updateKeys(); renderText(); }
     else prompt("Could not type into the app. Allow Accessibility for Terminal in System Settings.");
   });
 }
@@ -608,6 +669,10 @@ function movePointer(x, y, t, past = null) {
     if (el !== switchTo) { switchTo = el; switchSince = t; }
     if (t - switchSince < SWITCH_MS) el = hoverEl;
   } else switchTo = null;
+  pointerT = t;                          // how long the cursor has been off the guess row: Grok's answer may only go in after a while off it
+  if (hoverEl?.closest("#chips")) chipsOffSince = null;
+  else if (chipsOffSince == null) chipsOffSince = t;
+  if (rankHeld && chipsOffSince != null && t - chipsOffSince > RANK_OFF_MS) offerRank(rankHeld);
   history.push({ t, el, x, y });
   while (history.length && t - history[0].t > VOTE_MS * 2) history.shift();
   const c = $("cursor");
@@ -1006,6 +1071,7 @@ function toggleGrokMode(why) {
 }
 window.fourLooks.grokMode = () => grokMode;
 window.fourLooks.setting = (id) => runSetting(id);
+window.fourLooks.rank = () => ({ on: rankOn, held: !!rankHeld, stopped: rankDead });
 window.fourLooks.away = () => awayNow;
 window.fourLooks.hold = () => ({ key: holdEl?.dataset.key || null, p: +holdP.toFixed(2), pressed: pressedEl?.dataset.key || null, fading: [...fading].map(([el, f]) => [el.dataset.key, +f.p.toFixed(2)]), dwell: DWELL });
 // Things the app does itself, at once, with no model: say them to Grok or pick them from the top row.
@@ -1020,6 +1086,7 @@ const APP_COMMANDS = [
   [/^(next |change )?theme$/i, () => { runSetting("theme"); prompt(`Theme: ${theme}`); }],
   [/^tune( to me)?$/i, () => startStudy("tune")],
   [/^(hold|hold to press)$/i, () => { runSetting("hold"); prompt(`Hold to press is ${holdToPress ? "on" : "off"}.`); }],
+  [/^(grok guesses|smart guesses)$/i, () => runSetting("rank")],
   [/^(quit|close four looks)$/i, () => out?.quit?.()],
 ];
 function quickCommand(cmd) {
@@ -1511,6 +1578,7 @@ const SETTINGS = [
   { id: "fine", label: "Fine control", value: () => (pointer.precision ? "on (experimental)" : "off"), run: () => { pointer.precision = !pointer.precision; pointer.fineAt = null; store(FINE_KEY, pointer.precision); } },
   { id: "dwell", label: "Hold time", value: () => `${DWELL / 1000} s`, run: () => { DWELL = DWELL_STEPS[(DWELL_STEPS.indexOf(DWELL) + 1) % DWELL_STEPS.length]; store(DWELL_KEY, DWELL); holdP = 0; } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
+  { id: "rank", label: "Grok guesses", value: () => (rankDead ? "stopped" : rankOn ? "on, sends your sentence" : "off"), run: () => { rankOn = !rankOn; rankDead = ""; rankHeld = null; rankAnswers.clear(); clearTimeout(rankTimer); if (typer) typer.rankTop = null; store(RANK_KEY, rankOn); prompt(rankOn ? "Grok guesses are on. When a word is misspelled, your sentence goes to xAI and Grok picks the word that fits." : "Grok guesses are off."); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
   { id: "admin", label: "Admin view", value: () => (adminOn ? "on" : "off"), run: () => { adminOn = !adminOn; store("fourlooks.admin.v1", adminOn); applyViews(); } },
   { id: "tune", label: "Tune to me", value: () => `${tuned.name} smoothing`, run: () => { toggleMenu(false); startStudy("tune"); } },

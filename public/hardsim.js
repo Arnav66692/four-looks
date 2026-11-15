@@ -23,7 +23,10 @@ export async function run(only = null) {
 
   // No model calls and no talking from a test.
   const realFetch = window.fetch;
-  window.fetch = (url, opts) => (String(url).includes("/api/fix") ? Promise.resolve(new Response(JSON.stringify({ ok: true, text: JSON.parse(opts.body).text }), { headers: { "content-type": "application/json" } })) : realFetch(url, opts));
+  const reply = (obj) => new Response(JSON.stringify(obj), { headers: { "content-type": "application/json" } });
+  let rankStub = async (body) => ({ ok: false, ranked: body.candidates, error: "test" });      // a test never reaches xAI
+  window.fetch = (url, opts) => (String(url).includes("/api/fix") ? Promise.resolve(reply({ ok: true, text: JSON.parse(opts.body).text }))
+    : String(url).includes("/api/rank") ? rankStub(JSON.parse(opts.body)).then(reply) : realFetch(url, opts));
   const realSpeak = speechSynthesis.speak.bind(speechSynthesis);
   speechSynthesis.speak = () => {};
 
@@ -34,6 +37,7 @@ export async function run(only = null) {
     if (fl.grokMode()) { fl.exitGrok(); await sleep(200); }       // closed directly, so a scenario never starts inside Grok mode
     if (fl.grokMode()) throw new Error("Grok mode would not close before the scenario");
     sim.level.frown = 0;
+    if (fl.rank().on) fl.setting("rank");                          // Grok guesses are off unless a scenario turns them on
     await fl.setMode("keyboard");
     await sim.lookAt(0.5, -0.3, 200);            // look up at the app while things settle: selects nothing
     await sleep(700);
@@ -70,6 +74,7 @@ export async function run(only = null) {
     }
     return { pressed, shown };
   }
+  const rankWas = fl.rank().on;                 // the person's own setting, put back at the end
   const blinks = async (n, ms = 60) => { for (let i = 0; i < n; i++) await sim.cue("blink", ms); };
   const frownHold = (ms = 650, strength = 0.7) => sim.cue("frown", ms, strength);      // a deliberate lowering of the brows
   // The app teaches itself this face's frown on first run (the simulated face follows the prompts). Wait for it.
@@ -304,6 +309,42 @@ export async function run(only = null) {
       const text = fl.typer.text();
       return { pass: /^help me $/i.test(text) && stray.length === 0, detail: { text, strayFunctionKeys: stray.map((e) => e.type) } };
     },
+    // 14. Grok guesses (In A Park's idea). Off: no call at all. On: one call for a misspelled word, and Grok's
+    // pick becomes the bold guess. On the guess row the order waits until the cursor moves off. A failed
+    // call leaves the app's own order.
+    async grok_guess_goes_first() {
+      await reset({ hold: false });
+      const hit = (c) => { const L = "abcdefghijklmnopqrstuvwxyz", p = new Array(26).fill(0.004); p[L.indexOf(c)] = 0.9; return p; };
+      const lead = () => document.querySelector("#chips .lead")?.dataset.word.toLowerCase();
+      let calls = 0, sent = null, delay = 300, fail = false;
+      rankStub = async (body) => { calls++; sent = body; await sleep(delay); const c = body.candidates; return fail ? { ok: false, ranked: c, error: "timed out" } : { ok: true, ranked: [c[1], c[0], ...c.slice(2)], ms: delay }; };
+      const begin = async (first) => {             // "<first> need wte", then the last letter pressed for real
+        fl.setting("clear"); fl.typer.shift = "off";
+        fl.typer.pick(first); fl.typer.pick("need");
+        for (const c of "wte") fl.typer.letter(hit(c));
+        await sim.press("r");
+      };
+      await begin("i"); await sleep(1100);
+      const offCalls = calls, offLead = lead();
+      fl.setting("rank");
+      await begin("we"); await sleep(1200);
+      const on = { calls: calls - offCalls, sentence: sent?.sentence, lead: lead(), want: sent?.candidates[1] };
+      delay = 1600;
+      await begin("they");
+      let tries = 0;
+      for (; tries < 12 && !hovered()?.closest("#chips"); tries++) await sim.lookAtKey(lead(), 0.05);
+      const before = lead(), wanted = sent?.candidates[1], arrived = { tries, on: hovered()?.dataset.word || hovered()?.dataset.key || null, callsSoFar: calls, cursor: fl.cursor?.() };
+      await sleep(1900);
+      const held = { arrived, onGuessRow: !!hovered()?.closest("#chips"), on: hovered()?.dataset.word || hovered()?.dataset.key || null, waiting: fl.rank().held, leadUnchanged: lead() === before };
+      await sim.lookAt(0.5, -0.3, 250); await sleep(1000);
+      const released = { lead: lead(), want: wanted };
+      delay = 200; fail = true;
+      await begin("you"); await sleep(1000);
+      const failed = { lead: lead(), appsOwnFirst: sent?.candidates[0] };
+      fl.setting("rank");
+      const pass = offCalls === 0 && on.calls === 1 && on.lead === on.want && held.onGuessRow && held.waiting && held.leadUnchanged && released.lead === released.want && failed.lead === failed.appsOwnFirst && !fl.rank().on;
+      return { pass, detail: { offCalls, offLead, on, held, released, failed } };
+    },
   };
 
   for (const [name, fn] of Object.entries(scenarios)) {
@@ -317,6 +358,7 @@ export async function run(only = null) {
   try { await reset({ hold: false }); } catch { /* leave as is */ }
   window.fetch = realFetch; speechSynthesis.speak = realSpeak;
   out.running = null;
+  if (fl.rank().on !== rankWas) fl.setting("rank");
   out.passed = out.results.filter((r) => r.pass).length;
   out.total = out.results.length;
   out.done = true;
