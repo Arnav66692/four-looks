@@ -95,8 +95,9 @@ The flags are optional. `--web` skips the Mac helper. `--eval` also fetches the 
 
 1. Sit so your whole face is in the picture. A dot moves around the keyboard. Point your nose at it each time. This takes about ten seconds and fits the cursor to how you move.
 2. The app then learns your press move, a smile by default. If it cannot see the move clearly it switches to hold to press.
-3. Point at a key. Smile to press it, or hold still on it if hold to press is on.
-4. Open the dots key (bottom row) for settings and the Help tile.
+3. It then asks you to relax your face, then to lower your eyebrows and hold. That four second lesson is how it learns the frown that wakes Grok. If it cannot see your frown, the frown does nothing and the eye icon still works. The Teach frown tile in the dots menu runs the lesson again.
+4. Point at a key. Smile to press it, or hold still on it if hold to press is on.
+5. Open the dots key (bottom row) for settings and the Help tile.
 
 ## Gestures
 
@@ -108,7 +109,9 @@ The flags are optional. `--web` skips the Mac helper. `--eval` also fetches the 
 | One quick head shake | Shows the next guess. Right after an autocorrect, it puts your own letters back |
 | Close your eyes for 1 second | Puts the cursor back in the middle |
 | Close your eyes for 3 seconds | Calibrates again |
-| Press the eye icon beside the status line, or the Grok tile in the dots menu | Wakes Grok. The Help tile shows the hands-free way to wake it in your version |
+| Lower your eyebrows and hold half a second | Wakes Grok. The three dots under the eye icon fill as it builds |
+| Hold that frown for a full second | Cancels Grok, or stops it while it works |
+| Press the eye icon beside the status line, or the Grok tile in the dots menu | Also wakes Grok, with no gesture |
 
 In mouse mode (the mouse key) your head moves the real cursor, a quick opening of the mouth clicks, and two head shakes the same way switch apps. The keyboard comes back by itself when you click into a text box.
 
