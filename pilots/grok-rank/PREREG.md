@@ -57,13 +57,14 @@ together by the app's own estimate (0.329 to 0.371 dollars on the spend guard).
 
 ## What the pass was really worth (written 2:12 AM PT, after run 2)
 
-Four of the app's five misses in run 2 had one cause, and it was a fault in the app, not a limit of
-its method. The word list holds junk tokens (dor, bok, wach, hed), so the app treated those letters
-as real words and did not lead with a spelling fix. That is fixed now: a listed word rarer than
+Three of the app's five misses in run 2 (door, book, watch) had one cause, and it was a fault in the
+app, not a limit of its method. The word list holds junk tokens (dor, bok, wach), so the app treated
+those letters as real words and did not lead with a spelling fix. The other two misses were "what tme"
+and "i am thirty". That is fixed now: a listed word rarer than
 10^-4.6 counts as a likely misspelling (`RARE_WORD` in `src/keytyper.js`).
 
 With that fix and no Grok, the app's first choice is right in 29 of 31, and 11 of 11 on In A's words
-(`LOCAL_ONLY=1 node tools/rank-pilot.mjs`, no calls). Grok's 30 of 31 is one sentence better
+(`LOCAL_ONLY=1 node tools/rank-pilot.mjs`, no calls, saved in `results-app-alone.json`). Grok's 30 of 31 is one sentence better
 ("what tme": the app says "the", Grok says "time"). Against the fixed app the gain is 1, which is
 under the bar of 3.
 

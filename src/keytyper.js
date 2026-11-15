@@ -266,11 +266,20 @@ export class KeyTyper {
   }
 
   // Letters that are not a word, or that the list only knows as a rare token, are probably a misspelling.
-  // Words this person has used or kept before are never doubted.
+  // A word the person chose to keep is never doubted. Having used a word before excuses only a real, rare
+  // word: a typo that was once sent as typed is still a typo.
   doubtful(lower) {
-    if (this.learned.has(lower) || this.used.has(lower)) return false;
+    if (this.learned.has(lower)) return false;
     const id = this.dec.idOf(lower);
-    return id < 0 || this.dec.uni[id] < RARE_WORD;
+    if (id < 0) return true;
+    return !this.used.has(lower) && this.dec.uni[id] < RARE_WORD;
+  }
+
+  // True while the letters could still be the start of an ordinary word: the person is probably mid-word,
+  // not misspelling. ("wat" may become water. "wter" cannot become anything.)
+  mayGrow(lower) {
+    this.common ||= this.dec.words.filter((w, id) => this.dec.uni[id] >= RARE_WORD);
+    return this.common.some((w) => w.length > lower.length && w.startsWith(lower)) || [...this.learned].some((w) => w.length > lower.length && w.startsWith(lower));
   }
 
   // Grok's pick for these exact letters in this exact place goes first, which is the bold guess in the

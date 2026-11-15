@@ -35,10 +35,11 @@ if (process.env.LOCAL_ONLY) {
     if (first === want) { right++; if (i < HERS) hers++; } else console.log(`app alone misses: ${before} ${typed} -> ${first} (meant ${want})`);
   });
   console.log(`app alone, first choice right: ${right} of ${CASES.length} (In A's eleven: ${hers} of ${HERS})`);
+  writeFileSync(new URL("../pilots/grok-rank/results-app-alone.json", import.meta.url), JSON.stringify({ ranAt: new Date().toISOString(), cases: CASES.length, firstChoiceRight: right, onInAsEleven: hers }, null, 1));
   process.exit(0);
 }
 
-const rows = [];
+const rows = [];      // a call that fell back is not credited to Grok
 for (const [before, typed, want] of CASES) {
   const t = new KeyTyper(dec); t.shift = "off";
   for (const w of before.split(" ")) t.pick(w);
@@ -47,8 +48,8 @@ for (const [before, typed, want] of CASES) {
   // Only real words are ranked (run 2). The letters as typed stay on screen as a chip, but Grok does not see them.
   const candidates = [...new Set([...chips, ...t.spell(6)])].filter((w) => /^[a-z']+$/.test(w) && dec.idOf(w) >= 0).slice(0, 8);
   const r = await (await fetch(`http://localhost:${port}/api/rank`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sentence: `${before} ${typed}`, candidates }) })).json();
-  rows.push({ before, typed, want, local: chips[0], grok: r.ranked[0], ok: r.ok, error: r.error || null, ms: r.ms ?? null, inList: candidates.includes(want), candidates });
-  console.log(`${`${before} ${typed}`.padEnd(30)} want ${want.padEnd(9)} app ${String(chips[0]).padEnd(9)}${chips[0] === want ? "✓" : "✗"}  grok ${String(r.ranked[0]).padEnd(9)}${r.ranked[0] === want ? "✓" : "✗"}  ${r.ok ? r.ms + " ms" : "FELL BACK: " + r.error}${candidates.includes(want) ? "" : "   (not among the candidates)"}`);
+  rows.push({ before, typed, want, local: chips[0], grok: r.ok ? r.ranked[0] : null, ok: r.ok, error: r.error || null, ms: r.ms ?? null, inList: candidates.includes(want), candidates });
+  console.log(`${`${before} ${typed}`.padEnd(30)} want ${want.padEnd(9)} app ${String(chips[0]).padEnd(9)}${chips[0] === want ? "✓" : "✗"}  grok ${String(r.ok ? r.ranked[0] : "-").padEnd(9)}${r.ok && r.ranked[0] === want ? "✓" : "✗"}  ${r.ok ? r.ms + " ms" : "FELL BACK: " + r.error}${candidates.includes(want) ? "" : "   (not among the candidates)"}`);
 }
 const count = (list, who) => list.filter((r) => r[who] === r.want).length;
 const times = rows.filter((r) => r.ok).map((r) => r.ms).sort((a, b) => a - b), median = times.length ? times[Math.floor(times.length / 2)] : null;

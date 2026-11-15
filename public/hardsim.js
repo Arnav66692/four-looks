@@ -74,6 +74,7 @@ export async function run(only = null) {
     }
     return { pressed, shown };
   }
+  const rankWas = fl.rank().on;                 // the person's own setting, put back at the end
   const blinks = async (n, ms = 60) => { for (let i = 0; i < n; i++) await sim.cue("blink", ms); };
   const frownHold = (ms = 650, strength = 0.7) => sim.cue("frown", ms, strength);      // a deliberate lowering of the brows
   // The app teaches itself this face's frown on first run (the simulated face follows the prompts). Wait for it.
@@ -357,6 +358,7 @@ export async function run(only = null) {
   try { await reset({ hold: false }); } catch { /* leave as is */ }
   window.fetch = realFetch; speechSynthesis.speak = realSpeak;
   out.running = null;
+  if (fl.rank().on !== rankWas) fl.setting("rank");
   out.passed = out.results.filter((r) => r.pass).length;
   out.total = out.results.length;
   out.done = true;

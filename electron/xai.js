@@ -52,6 +52,7 @@ function nextUsage(model, usage) {
   const outTokens = nonnegative(usage?.completion_tokens ?? usage?.output_tokens ?? 0, 'output tokens');
   const [inputPrice, outputPrice] = Object.hasOwn(PRICES, model) ? PRICES[model] : FALLBACK_PRICE;
   return {
+    ...(typeof current.rankDay === 'string' ? { rankDay: current.rankDay, rankToday: current.rankToday } : {}), // server.js keeps these for Grok guesses
     usd: current.usd + (inTokens * inputPrice + outTokens * outputPrice) / 1e6,
     calls: current.calls + 1,
     inTokens: current.inTokens + inTokens,

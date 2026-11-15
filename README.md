@@ -123,6 +123,7 @@ All in the dots menu.
 - **Hold to press** and **Hold time.** Press by holding still, for 1.0, 0.8 or 0.6 seconds.
 - **Press with.** Smile, open mouth, pucker, raised brows or a firm blink.
 - **Head reach.** How far the cursor moves for the same head turn.
+- **Grok guesses.** Off by default. When on and a word is misspelled, Grok picks the word that fits the sentence and it becomes the bold guess. Needs an xAI key. See the Grok section for what it sends.
 - **Theme**, **Camera view**, **Admin view** (shows what the tracker sees).
 - **Calibrate** and **Tune to me.** Refit the cursor to you.
 
@@ -141,6 +142,7 @@ Then wake Grok, type what you want, and press `do it`.
 - **Spending is capped.** The app keeps its own count in `.usage.json` and stops at an estimated 1 dollar and 300 calls a day. Change the cap with `FL_MAX_USD` and `FL_MAX_CALLS_PER_DAY`.
 - **It asks first.** Anything that sends, buys, deletes or closes unsaved work waits for a nod. It will not type passwords, card numbers or one-time codes. It stops if a system permission, password or settings window is in front.
 - **What goes to xAI.** The sentence you typed, the names of the buttons and fields in the app in front, and a screenshot only when it has to look. Nothing is sent until you press `do it` or `fix`.
+- **The one exception is Grok guesses, and it is off until you turn it on.** With it on, each time you pause on a misspelled word the last twelve words you typed and the spelling candidates go to xAI, so Grok can pick the one that fits. Each one is a small paid call that counts toward the same cap.
 
 ## Privacy
 
@@ -160,7 +162,7 @@ It runs the offline checks for the Grok agent and types a list of strange words 
 
 To watch the keyboard work without a face, open http://localhost:5173/?sim=1 for a simulated one.
 
-The full simulation suite has 13 scenarios and takes about ten minutes for each setting. With the server running (`node server.js`), run it in a headless Chrome.
+The full simulation suite has 14 scenarios and takes about ten minutes for each setting. With the server running (`node server.js`), run it in a headless Chrome.
 
 ```bash
 node tools/hardsim-run.mjs tremor
@@ -196,7 +198,9 @@ As of Nov 15, 2026.
 - **It is slow so far.** A first-day user measured about 2 to 3 words a minute. Taking the suggested words is faster than spelling.
 - **The word guesser** gets 97.5% of words right when key presses are scattered by 0.35 of a key width (1,048 words, `node tools/kb-smoke.mjs 0.35`, needs `--eval` data).
 - **Spelling suggestions.** A misspelled word brings up real words a letter or two away. On a teammate's eleven test words the right word was shown for all eleven, and was the first guess for ten (`node tools/spell-check.mjs`).
-- **Simulated use.** The 13 scenario suite passes under strong tremor and under spike frames at the real window size. That is a simulated face, not a second person.
+- **Grok guesses, measured.** On 31 misspelled sentences the app alone puts the right word first in 29, and Grok in 30, answering in about 0.4 seconds. So it adds a little, not a lot. The test and its two runs are in `pilots/grok-rank`.
+- **Selections.** The line at the bottom right counts every key, guess, nod and undo, next to speed and keys saved.
+- **Simulated use.** The 14 scenario suite passes under strong tremor and under spike frames at the real window size. That is a simulated face, not a second person.
 - **Grok tasks ran end to end on one Mac.** Opening an app took 0.2 seconds and typing into a document took 3.0 seconds.
 - **Clicks that Grok places from a screenshot are rough.** It prefers links, shortcuts and buttons it can find by name.
 - **Not tested.** The desktop app on Windows or Linux (use the browser there), Intel Macs, faces other than the builder's, glasses, low light.
