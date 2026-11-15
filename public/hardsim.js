@@ -265,6 +265,28 @@ export async function run(only = null) {
       fl.setting("clear");
       return { pass: seen >= 11 && falseNods === 0, detail: { nodsSeen: `${seen}/12`, rowHopsTakenAsNods: falseNods } };
     },
+    // 13. Staying on a word guess or on undo keeps going. Staying on a letter does not repeat it.
+    async guesses_and_undo_repeat() {
+      await reset();
+      await holdType("i ");
+      const n0 = fl.log.length;
+      const lead = document.querySelector("#chips .lead");
+      const r = lead.getBoundingClientRect();
+      await sim.lookAt((r.left + r.width / 2) / innerWidth, (r.top + r.height / 2) / innerHeight, 250);
+      for (let i = 0; i < 40 && hovered() !== lead; i++) await sim.lookAtKey(lead.dataset.word, 0.05);
+      await sleep(3800);                                           // stay put on the bold guess
+      const picks = since(n0, ["pick"]).length, words = fl.typer.text().trim().split(/\s+/).length;
+      const n1 = fl.log.length;
+      await holdPress("undo", 12000);
+      await sleep(3600);                                           // stay put on undo
+      const undos = since(n1, ["undo"]).length;
+      await reset();
+      const n2 = fl.log.length;
+      await holdPress("e");
+      await sleep(3200);                                           // stay put on a letter
+      const letters = since(n2, ["letter"]).length;
+      return { pass: picks >= 2 && undos >= 2 && letters === 1, detail: { guessesTakenWhileStaying: picks, wordsNow: words, undosWhileStaying: undos, lettersWhileStayingOnE: letters } };
+    },
     // 11. Looking up to read the app in the middle of a word, then carrying on.
     async read_then_carry_on() {
       await reset();

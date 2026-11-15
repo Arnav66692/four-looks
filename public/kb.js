@@ -8,6 +8,7 @@ import { createAdmin } from "./admin.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+const FINE_KEY = "fourlooks.fine.v2";                    // fine control: small movements at reduced gain (experimental, off by default)
 const DWELL_KEY = "fourlooks.dwell.v1";
 const DWELL_STEPS = [1000, 800, 600];                   // hold times to choose from, ms
 let DWELL = Number(params.get("dwell")) || (() => { try { const v = JSON.parse(localStorage.getItem(DWELL_KEY)); return DWELL_STEPS.includes(v) ? v : 800; } catch { return 800; } })();   // ms on a key to press it
@@ -27,19 +28,30 @@ const VOTE_MS = 350;                                    // a press goes to the k
 let holdEl = null, holdP = 0, holdT = 0, lockedEl = null, pressedEl = null, offSince = null;
 const SLOW_KEYS = new Set(["shift", "123", "abc", "menu", "mouse", "undo", "fix", "speak", "send", "grokmode"]);
 const STILL_MS = 150;                                   // settled means: in the last this many ms
-const STILL_MOVE = 0.12;                                //   the cursor moved less than this many key widths (his own resting steps: median 0.05)
-const FAST_MOVE = 0.45;                                 // moving this many key widths in that time, the fill is at its slowest
-const MOVING_RATE = 0.15;                               // the slowest the fill ever runs
+const STILL_MOVE = 0.18;                                //   the cursor moved less than this many key widths (his own resting steps: median 0.05)
+const FAST_MOVE = 0.65;                                 // moving this many key widths in that time, the fill is at its slowest
+const MOVING_RATE = 0.3;                                // (0.12, 0.45 and 0.15 stalled keys under strong tremor: some never filled in nine seconds)
+                              // the slowest the fill ever runs
 const fading = new Map();                               // keys you have left, with what remains of their fill
 const holdAt = { x: 0, y: 0, n: 0 };                    // where the cursor rested while the current key filled
 const SLOW_HOLD = 1.5;                                  // a slow key needs this many times the hold of a letter
+const REPEATS = new Set(["⌫", "undo", "pick"]);          // keys that act again while the cursor stays on them
+let noRepeatEl = null;                                  // a chip that was a one-off command when it was pressed
+// Every way of pressing a key ends here, so a press by smile or by click cannot be followed by the hold
+// finishing on the same key a moment later and pressing it twice.
+function afterPress(el) {
+  pressedEl = el; offSince = null;
+  if (holdEl === el) { holdP = 0; holdAt.x = holdAt.y = holdAt.n = 0; setFill(el, 0); }
+  fading.delete(el);
+  if (nod.state === "dip") nod.pressed = true;           // a trip down to press a key is not a nod
+}
 const REARM_MS = 250;                                   // a pressed key can press again once the cursor has been off it this long
 const HOLD_DRAIN = 1.6;                                 // a hold drains this many times slower than it builds
 const SWITCH_MS = 40;                                   // a new key takes the selection after the pointer has been in it this long
 let switchTo = null, switchSince = 0;
-const NOD_AMP = Number(params.get("nod") || 0.3);        // a nod dips at least this much of your calibrated up-down range
+const NOD_AMP = Number(params.get("nod") || 0.25);       // a nod dips at least this much of your calibrated up-down range (his recognised nods: median 0.57)
 const NOD_START = 0.07;                                 // a dip this big starts the nod clock
-const NOD_MS = 550;                                     // and the head is back within this long
+const NOD_MS = 800;                                     // and the head is back within this long (was 550: his head dips take about a second end to end)
 const IDLE_MS = 6000;                                   // gaps longer than this do not count as typing time
 const CHIP_SLOTS = 5;
 const CHIP_ORDER = [3, 1, 0, 2, 4];     // slot -> guess rank: the best guess sits in the middle of the row
@@ -106,10 +118,10 @@ setInterval(() => {                        // every session is saved on this com
 window.fourLooks = { log };
 
 let typer = null;
-const LAYOUT_KEY = "fourlooks.layout.v3";
+const LAYOUT_KEY = "fourlooks.layout.v4";               // v4: qwerty is the default, by his choice
 const LETTER_LAYOUTS = ["head", "big", "abc"];        // head-arranged letters, boxes (phone-pad order), and QWERTY
 const LAYOUT_NAME = { head: "head", abc: "qwerty", big: "boxes" };
-let letters = (() => { try { const v = JSON.parse(localStorage.getItem(LAYOUT_KEY)); return LETTER_LAYOUTS.includes(v) ? v : "head"; } catch { return "head"; } })();
+let letters = (() => { try { const v = JSON.parse(localStorage.getItem(LAYOUT_KEY)); return LETTER_LAYOUTS.includes(v) ? v : "abc"; } catch { return "abc"; } })();
 let layer = letters;
 let pointer = loadPointer();
 let letterCenters = [];
@@ -188,6 +200,8 @@ function measure() {
   letterCenters = [...document.querySelectorAll("#keys .key[data-key]")]
     .filter((el) => el.dataset.key.length === 1 && LETTERS.includes(el.dataset.key))
     .map((el) => { const r = el.getBoundingClientRect(); keyWidth = r.width; return { letter: el.dataset.key, x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  const any = document.querySelector("#keys .key[data-key]")?.getBoundingClientRect();
+  if (any && innerWidth && innerHeight) pointer.unit = [Math.max(0.03, (keyWidth || any.width) / innerWidth), Math.max(0.03, any.height / innerHeight)];
 }
 function renderText() {
   if (!typer) return;
@@ -308,6 +322,11 @@ function acceptGhost(how) {
 
 // ---------- Grok check: grammar and sense, through the local server (needs XAI_API_KEY in .env) ----------
 window.fourLooks.offset = () => pointer.offset;
+if (params.get("sim")) record("sim", { noise: params.get("noise"), spike: params.get("spike"), lag: params.get("lag") });      // marks a simulated-face session, so it is never mistaken for his
+// Fine control is OFF unless switched on. In the hard simulation it made the paragraph worse (4 wrong keys
+// and 6 of 12 words with it on, 0 wrong and 12 of 12 with it off), because the cursor can sit away from
+// where the head points. It stays as a tile to try, not as the default.
+pointer.precision = params.get("fine") === "1" ? true : params.get("fine") === "0" ? false : (() => { try { return JSON.parse(localStorage.getItem(FINE_KEY)) === true; } catch { return false; } })();
 // The guided test borrows the pointer, the press move and the nod while it runs.
 const study = { capture: false, onPress: null, onNod: null, watchers: new Set() };
 let lastTrace = 0;
@@ -354,7 +373,7 @@ function press(el, x, y, sure = false) {
   if (k === "menu") { toggleMenu(); return; }
   if (k === "mouse") { setMode("mouse"); return; }
   if (k === "grokmode") { toggleGrokMode("icon"); return; }
-  if (k === "pick" && el.dataset.cmd) { quickCommand(el.dataset.cmd); return; }
+  if (k === "pick" && el.dataset.cmd) { noRepeatEl = el; quickCommand(el.dataset.cmd); return; }      // a command chip acts once, however long you stay
   if (k === "send" && grokMode) { runGrok(); return; }
   if (k === "dock:stop") { stopGrok("you"); return; }
   if (k === "dock:keyboard") { if (grok.busy) stopGrok("you"); setMode("keyboard"); return; }
@@ -614,7 +633,10 @@ function movePointer(x, y, t, past = null) {
       else if (offSince == null) offSince = t;
       else if (t - offSince > REARM_MS) pressedEl = null;
     }
-    const quiet = hoverEl === pressedEl && hoverEl?.dataset.key !== "⌫";
+    // Letters need you to move off before they press again. Delete, undo and the word guesses keep going
+    // while you stay: each one takes a fresh full hold, so staying on the bold guess writes word after word.
+    if (noRepeatEl && hoverEl !== noRepeatEl) noRepeatEl = null;
+    const quiet = hoverEl === pressedEl && (!REPEATS.has(hoverEl?.dataset.key) || hoverEl === noRepeatEl);
     if (holdEl && !quiet) {
       // The fill runs at full speed while the head has settled and slows while it is still moving, so a key
       // you are crossing, or drifting onto on the way to its neighbour, barely fills. It never stops outright:
@@ -631,8 +653,9 @@ function movePointer(x, y, t, past = null) {
       // The press is read from the average spot the cursor rested on while the key filled.
       const px = holdAt.n ? holdAt.x / holdAt.n : x, py = holdAt.n ? holdAt.y / holdAt.n : y;
       holdAt.x = holdAt.y = holdAt.n = 0;
-      press(holdEl, Math.min(r.right, Math.max(r.left, px)), Math.min(r.bottom, Math.max(r.top, py)), true);
-      pressedEl = holdEl; offSince = null;   // backspace is the one key that repeats while you stay on it
+      const done = holdEl;
+      press(done, Math.min(r.right, Math.max(r.left, px)), Math.min(r.bottom, Math.max(r.top, py)), true);
+      afterPress(done);
       holdP = 0; hoverSince = t;
     }
     progress = Math.max(0, Math.min(1, holdP));
@@ -804,16 +827,28 @@ const FROWN_CANCEL_MS = 1000;          // and this long to cancel or stop it, so
 const FROWN_GAP_MS = 80;               // the hold must stay above the start level: dips shorter than this are forgiven
 const FROWN_ARM_MS = 300;              // relaxed this long before a frown can begin
 const FROWN_WARMUP_MS = 4000;          // nothing counts until the face has been tracked this long
-const FROWN_DRIFT = 0.1;               // the resting level may drift this far from the taught one, no further
+const FROWN_DRIFT = 0.25;              // the resting level may drift this share of his rest-to-frown span, no further
 const FROWN_QUIET_MS = 300;            // closing the eyes pulls the brows down: ignored during and just after
-let frownCfg = (() => { try { const v = JSON.parse(localStorage.getItem(FROWN_KEY)); return v && typeof v.rest === "number" ? v : null; } catch { return null; } })();
+let frownCfg = (() => { try { const v = JSON.parse(localStorage.getItem(FROWN_KEY)); return v && v.ok === true && ["brow", "gap", "drop"].includes(v.signal) && Number.isFinite(v.rest) && Number.isFinite(v.firm) && v.firm > v.rest ? v : null; } catch { return null; } })();
+// Ways to read "eyebrows lowered or drawn together". Higher always means more frown. On his face the
+// tracker's eyebrow score barely moved (0.095 relaxed, 0.15 frowning), so the lesson measures all of
+// these and keeps the one that separates his frown from his resting face best. The squint score is left
+// out on purpose: it also rises with a smile, which is his press move.
+const dist3 = (p, q) => Math.hypot(p.x - q.x, p.y - q.y, (p.z || 0) - (q.z || 0));
+const FROWN_SIGNALS = {
+  brow: (f) => ((f.scores.browDownLeft || 0) + (f.scores.browDownRight || 0)) / 2,                       // the tracker's own eyebrow score
+  gap: (f) => (f.lm ? -dist3(f.lm[107], f.lm[336]) / (dist3(f.lm[33], f.lm[263]) || 1) : null),            // inner ends of the eyebrows drawing together
+  drop: (f) => (f.lm ? -(dist3(f.lm[105], f.lm[159]) + dist3(f.lm[334], f.lm[386])) / (2 * (dist3(f.lm[33], f.lm[263]) || 1)) : null),   // eyebrows coming down toward the eyes
+};
+const FROWN_MIN_SEP = 4;               // his frown must sit this many resting spreads above his resting level
+const frownValue = (f) => FROWN_SIGNALS[frownCfg?.signal || "brow"](f);
 const frown = { base: frownCfg ? frownCfg.rest : 0.1, since: null, lastHigh: 0, fired: false, armed: false, relaxedSince: null, faceSince: null, lostAt: null, quietUntil: 0, level: 0 };
 let dotsTimer = 0;
 const browDown = (f) => ((f.scores.browDownLeft || 0) + (f.scores.browDownRight || 0)) / 2;
 function showDots(n) { [...document.querySelectorAll("#grokbtn .blinks i")].forEach((el, i) => el.classList.toggle("on", i < n)); }
 function frownLevels() {
-  const span = Math.max(0.12, frownCfg.firm - frownCfg.rest);
-  const drift = Math.max(-FROWN_DRIFT, Math.min(FROWN_DRIFT, frown.base - frownCfg.rest));
+  const span = frownCfg.firm - frownCfg.rest;
+  const drift = Math.max(0, Math.min(FROWN_DRIFT * span, frown.base - frownCfg.rest));      // upward only: drift can make a wake harder, never easier
   return { high: frownCfg.rest + drift + FROWN_START * span, low: frownCfg.rest + drift + FROWN_KEEP * span };
 }
 // Forget any frown in progress. The face has to be seen relaxed again before the next one can begin.
@@ -824,8 +859,10 @@ function frownReset() {
 function detectFrown(f, shut) {
   if (frown.faceSince == null) frown.faceSince = f.t;
   frown.lostAt = null;
-  const v = (frown.level = browDown(f));
   if (!frownCfg || !frownCfg.ok) return;                          // not taught yet, or his frown could not be seen
+  const v = frownValue(f);
+  if (v == null) return;
+  frown.level = v;
   if (shut) frown.quietUntil = f.t + FROWN_QUIET_MS;
   if (f.t < frown.quietUntil || f.t - frown.faceSince < FROWN_WARMUP_MS) { frownReset(); return; }
   const { high, low } = frownLevels();
@@ -853,7 +890,7 @@ function detectFrown(f, shut) {
   toggleGrokMode("frown");
 }
 // The lesson: two seconds relaxed, two seconds frowning. Sets where a frown starts for this face.
-let frownAsked = false;
+let frownAsked = false, frownDoneAt = 0;
 async function teachFrown() {
   if (!lastFrame || calibrating || grok.busy) return;
   frownAsked = true;
@@ -862,34 +899,61 @@ async function teachFrown() {
   calibrating = true;
   $("cursor").style.display = "none";
   const collect = async (ms) => {
-    const xs = [];
-    const w = (f) => { if (f.face) xs.push(browDown(f)); };
+    const xs = Object.fromEntries(Object.keys(FROWN_SIGNALS).map((k) => [k, []]));
+    const w = (f) => { if (f.face) for (const [k, fn] of Object.entries(FROWN_SIGNALS)) { const v = fn(f); if (v != null && Number.isFinite(v)) xs[k].push(v); } };
     watchers.add(w); await sleep(ms); watchers.delete(w);
-    return xs.sort((x, y) => x - y);
+    for (const k of Object.keys(xs)) xs[k].sort((x, y) => x - y);
+    return xs;
   };
-  prompt("Teaching Grok your frown. First relax your face.", true);
+  const pct = (xs, q) => xs[Math.min(xs.length - 1, Math.floor(xs.length * q))];
+  // Relaxed, and looking around: the resting spread then includes what turning the head does to each signal.
+  prompt("Teaching Grok your frown. Relax your face and look around the keyboard.", true);
   await sleep(700);
-  const rest = await collect(1500);
+  const rest = await collect(2500);
   prompt("Lower your eyebrows and hold now.", true);
   await sleep(600);
   const firm = await collect(2000);
-  const r = rest.length ? rest[Math.floor(rest.length * 0.5)] : null, fm = firm.length ? firm[Math.floor(firm.length * 0.7)] : null;
-  const ok = r != null && fm != null && fm - r >= 0.12;
-  frownCfg = { rest: +(r ?? 0.1).toFixed(3), firm: +(fm ?? 0.1).toFixed(3), ok };
-  store(FROWN_KEY, frownCfg);
-  record("frown-teach", frownCfg);
-  frown.base = frownCfg.rest;
+  const tried = {};
+  let best = null;
+  for (const k of Object.keys(FROWN_SIGNALS)) {
+    if (rest[k].length < 15 || firm[k].length < 15) continue;
+    const r = pct(rest[k], 0.5), spread = pct(rest[k], 0.9) - pct(rest[k], 0.1), fm = pct(firm[k], 0.6);
+    const floor = k === "brow" ? 0.02 : 0.004;                    // the least spread ever assumed, so a very still face does not look infinitely separable
+    const sep = (fm - r) / Math.max(spread, floor);
+    tried[k] = { rest: +r.toFixed(4), spread: +spread.toFixed(4), firm: +fm.toFixed(4), sep: +sep.toFixed(1) };
+    if (sep >= FROWN_MIN_SEP && (!best || sep > best.sep)) best = { signal: k, rest: r, firm: fm, sep };
+  }
+  const ok = !!best;
+  record("frown-teach", { ok, signal: best?.signal ?? null, tried });
+  if (ok) {                                                       // only a lesson that worked is kept, and it never replaces a working one with a failure
+    frownCfg = { signal: best.signal, rest: +best.rest.toFixed(4), firm: +best.firm.toFixed(4), ok: true, tried };
+    if (!params.get("sim")) store(FROWN_KEY, frownCfg);
+    frown.base = frownCfg.rest;
+  }
   frownReset();
+  frownDoneAt = performance.now();
   calibrating = false;
   refreshMenu();
   prompt(ok ? "Got it. Lower your eyebrows and hold half a second to wake Grok."
-    : "I could not see your frown clearly. Use the eye icon or the Grok tile in the dots menu, or choose Teach frown to try again.");
+    : frownCfg?.ok ? "I could not see that frown clearly, so I kept the one from before."
+      : "I could not see your frown clearly. Use the eye icon to wake Grok, or choose Teach frown in the dots menu to try again.", false, true);
 }
+setInterval(() => {           // on the very first launch, once everything else is set up, show the guide to the commands
+  if (tutorialShown || params.get("sim") && !params.get("tutorial")) return;
+  if (!(frownCfg || frownAsked) || !usingCamera || !lastFrame?.face || !pointer.ready || calibrating || study.capture || params.get("study") || mode !== "keyboard" || grokMode || grok.busy || !typer) return;
+  if (document.body.classList.contains("cue-test") || !(cueCfg.calibrated || holdToPress)) return;      // the press move is still being set up
+  if (frownDoneAt && performance.now() - frownDoneAt < 5000) return;                                       // let the lesson's message be read first
+  tutorialShown = true;
+  let seen = false;
+  try { seen = !!JSON.parse(localStorage.getItem(HELP_KEY)); } catch { /* show it */ }
+  if (!seen) toggleHelp(true);
+}, 1200);
+let tutorialShown = false;
 setInterval(() => {           // the first time the app is ready and no frown has been taught, teach it
   if (frownCfg || frownAsked || !usingCamera || !lastFrame?.face || !pointer.ready || calibrating || study.capture || params.get("study") || mode !== "keyboard" || grokMode || grok.busy || !typer) return;
   teachFrown();
 }, 1500);
-window.fourLooks.frown = () => ({ level: +frown.level.toFixed(2), taught: !!frownCfg?.ok, rest: frownCfg?.rest ?? null, firm: frownCfg?.firm ?? null, ...(frownCfg?.ok ? Object.fromEntries(Object.entries(frownLevels()).map(([k, x]) => [k, +x.toFixed(2)])) : {}), armed: frown.armed });
+window.fourLooks.frown = () => ({ level: +frown.level.toFixed(3), taught: !!frownCfg?.ok, signal: frownCfg?.signal ?? null, tried: frownCfg?.tried ?? null, rest: frownCfg?.rest ?? null, firm: frownCfg?.firm ?? null, ...(frownCfg?.ok ? Object.fromEntries(Object.entries(frownLevels()).map(([k, x]) => [k, +x.toFixed(3)])) : {}), armed: frown.armed });
 window.fourLooks.frownReset = frownReset;
 window.fourLooks.exitGrok = () => { if (grokMode) exitGrokMode(); };
 async function enterGrokMode(why) {
@@ -1001,7 +1065,8 @@ window.fourLooks.grokGoal = async (goal, autoAnswer = null) => {
 // ---------- nod: a quick, clear dip and return of the head accepts the grey guess ----------
 // Measured in the person's own calibrated range (not screen pixels), so moving down a key row or
 // two never counts: a nod has to dip at least NOD_AMP of that range and be back within NOD_MS.
-const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, last: 0 };
+const nod = { rest: null, restX: null, state: "rest", since: 0, peak: 0, peakAt: 0, pressed: false, last: 0 };
+const NOD_DOWN_MS = 500;               // the way down takes no longer than this: slower is moving to a lower key
 let nodCount = 0;                      // nods recognised this session, for the test suite
 window.fourLooks.nods = () => nodCount;
 function detectNod(f) {
@@ -1011,16 +1076,22 @@ function detectNod(f) {
   if (nod.rest == null) { nod.rest = y; nod.restX = x; return; }
   const dy = y - nod.rest;
   if (nod.state === "rest") {
-    if (dy > NOD_START && f.t - nod.last > 400) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; }
+    if (dy > NOD_START && f.t - nod.last > 400) { nod.state = "dip"; nod.since = f.t; nod.peak = dy; nod.peakAt = f.t; nod.pressed = false; }
     else { nod.rest += 0.15 * (y - nod.rest); nod.restX += 0.15 * (x - nod.restX); }
     return;
   }
-  nod.peak = Math.max(nod.peak, dy);
+  if (dy > nod.peak) { nod.peak = dy; nod.peakAt = f.t; }
   // A nod may wander sideways by half its own depth, and never less than 0.12 of the range: his head
   // wobbles about 0.07 of the range side to side at rest, which used to cancel a nod as it began.
   const sideways = Math.abs(x - nod.restX) > Math.max(0.5 * nod.peak, 0.12);
   if (f.t - nod.since > NOD_MS || sideways) { nod.state = "rest"; nod.rest = y; nod.restX = x; return; }   // a real move
-  if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) { nod.state = "rest"; nod.last = f.t; nodCount++; acceptGhost("nod"); return; }
+  if (nod.peak >= NOD_AMP && dy < 0.35 * nod.peak) {
+    nod.state = "rest"; nod.last = f.t;
+    // Down, and straight back up, with no key pressed on the way: that is a nod. A slow way down, or a key
+    // pressed at the bottom, was a trip to a lower row and takes no word.
+    if (nod.pressed || nod.peakAt - nod.since > NOD_DOWN_MS) return;
+    nodCount++; acceptGhost("nod"); return;
+  }
   // A small blip that has already come back up was tremor, not the start of a nod. Go straight back to
   // waiting, so it cannot block a real nod that begins a moment later (it used to hold the detector for
   // up to half a second, and a nod that started inside that window was missed).
@@ -1116,6 +1187,7 @@ function onFrame(f) {
       if (f.lm) record("aim", { key: target.el.dataset.key, pose: f.pose.map((v) => +v.toFixed(4)), nose: [+f.lm[1].x.toFixed(4), +f.lm[1].y.toFixed(4)],
         eyes: +Math.hypot(f.lm[33].x - f.lm[263].x, f.lm[33].y - f.lm[263].y).toFixed(4), cursor: [Math.round(target.x), Math.round(target.y)], offset: pointer.offset.map((v) => +v.toFixed(3)) });
       press(target.el, target.x, target.y);
+      afterPress(target.el);
       hoverSince = f.t; armed = false;
     }
   } else { blinkSince = null; blinkFired = false; }
@@ -1357,33 +1429,34 @@ function setLayout(name) {
   buildKeys(); renderText(); updatePrior();
   prompt(name === "big" ? "Boxes: press the box that holds your letter. The word is worked out for you." : `Keys: ${LAYOUT_NAME[name]}.`);
 }
-const HELP_KEY = "fourlooks.help.v1";
+const HELP_KEY = "fourlooks.help.v2";                    // v2: the guide is shown once on first launch
 const HELP_HTML = `<div class="help">
   <section><h3>Type</h3><ul>
-    <li>Point your nose at a key.</li>
-    <li>Hold still on it to press. After a third of the hold the key locks.</li>
-    <li>The bold word on top is the best guess. Press it to take it.</li>
-    <li>Nod takes the grey word. Nod twice takes the phrase.</li>
+    <li>Point your nose at a key and hold still. It fills, then presses.</li>
+    <li>Small head movements move the cursor gently. Big ones move it far.</li>
+    <li>The bold word on top is the best guess. Stay on it to take word after word.</li>
+    <li>Nod (head down and back up) takes the grey word.</li>
     <li>One quick shake shows the next guess.</li>
   </ul></section>
   <section><h3>Fix</h3><ul>
-    <li>Undo steps back. The arrow key deletes.</li>
+    <li>Stay on undo to step back, on the arrow key to delete.</li>
+    <li>A shake right after a correction puts your own letters back.</li>
     <li>Eyes closed 1 second puts the cursor back in the middle.</li>
     <li>Eyes closed 3 seconds calibrates again.</li>
-    <li>Fix asks Grok to check the sentence.</li>
+    <li>Looking well off to the side or below presses nothing.</li>
   </ul></section>
   <section><h3>Grok</h3><ul>
-    <li>Lower your eyebrows and hold half a second. The eye lights up.</li>
+    <li>Lower your eyebrows and hold, or press the eye. The GROK tag shows.</li>
+    <li>Frown not picked up? Dots menu, Teach frown.</li>
     <li>Type what you want, or pick one on top.</li>
     <li>Press do it. Try: open gmail.</li>
-    <li>Nod is yes. Shake is no, or stop.</li>
-    <li>Also works: help, calibrate, mouse mode, boxes, qwerty, theme, quit.</li>
+    <li>Nod or your press move is yes. Shake is no.</li>
   </ul></section>
-  <section><h3>Mouse</h3><ul>
+  <section><h3>Mouse and menu</h3><ul>
     <li>Press mouse. Your head moves the real cursor.</li>
     <li>Open your mouth quickly to click.</li>
     <li>Shake twice the same way to switch apps.</li>
-    <li>The keyboard comes back in a text box.</li>
+    <li>The dots key opens settings: layout, hold time, fine control.</li>
     <li>Quit: the dots menu, or Control Option Q.</li>
   </ul></section>
 </div>`;
@@ -1397,7 +1470,7 @@ function toggleHelp(open = !helpOpen) {
 }
 const SETTINGS = [
   { id: "help", label: "Help", value: () => "how it all works", run: () => toggleHelp(true) },
-  { id: "frown", label: "Teach frown", value: () => (frownCfg?.ok ? "wakes Grok" : frownCfg ? "not seen, try again" : "not taught"), run: () => { toggleMenu(false); teachFrown(); } },
+  { id: "frown", label: "Teach frown", value: () => (frownCfg?.ok ? "wakes Grok" : frownAsked ? "not seen, try again" : "not taught"), run: () => { toggleMenu(false); teachFrown(); } },
   { id: "grok", label: "Grok", value: () => "or frown and hold", run: () => { toggleMenu(false); enterGrokMode("menu"); } },
   { id: "mouse", label: "Mouse mode", value: () => "head moves the cursor", run: () => { toggleMenu(false); setMode("mouse"); } },
   { id: "theme", label: "Theme", value: () => theme, run: () => { theme = cycle(THEMES, theme); store("fourlooks.theme.v1", theme); applyTheme(); } },
@@ -1408,6 +1481,7 @@ const SETTINGS = [
   { id: "presshold", label: "Press hold", value: () => pressName, run: () => { const names = Object.keys(PRESS_STEPS); pressName = names[(names.indexOf(pressName) + 1) % names.length]; pressExtra = PRESS_STEPS[pressName]; store(PRESS_KEY, pressName); } },
   { id: "layout", label: "Key layout", value: () => LAYOUT_NAME[letters], run: () => setLayout(LETTER_LAYOUTS[(LETTER_LAYOUTS.indexOf(letters) + 1) % LETTER_LAYOUTS.length]) },
   { id: "reach", label: "Head reach", value: () => `${pointer.gain}x`, run: () => { pointer.gain = REACH_STEPS.includes(pointer.gain) ? cycle(REACH_STEPS, pointer.gain) : 1; store(REACH_KEY, pointer.gain); } },
+  { id: "fine", label: "Fine control", value: () => (pointer.precision ? "on (experimental)" : "off"), run: () => { pointer.precision = !pointer.precision; pointer.fineAt = null; store(FINE_KEY, pointer.precision); } },
   { id: "dwell", label: "Hold time", value: () => `${DWELL / 1000} s`, run: () => { DWELL = DWELL_STEPS[(DWELL_STEPS.indexOf(DWELL) + 1) % DWELL_STEPS.length]; store(DWELL_KEY, DWELL); holdP = 0; } },
   { id: "hold", label: "Hold to press", value: () => (holdToPress ? "on" : "off"), run: () => { holdToPress = !holdToPress; store(HOLD_KEY, holdToPress); hoverSince = performance.now(); } },
   { id: "camview", label: "Camera view", value: () => (camView ? "on" : "off"), run: () => { camView = !camView; store("fourlooks.camview.v1", camView); applyViews(); } },
@@ -1429,7 +1503,8 @@ if (window.fourLooksOut?.quit) {            // a plain close button, for the mou
 function buildMenu() {
   $("menu").classList.toggle("helping", helpOpen);
   if (helpOpen) {
-    $("menu").innerHTML = `${HELP_HTML}<div class="tile wide" data-key="set:helpclose" style="--i:0"><span class="name">Got it</span><span class="val">back to the keyboard</span></div>`;
+    // The way out comes first, so it is always on screen however tall the guide is.
+    $("menu").innerHTML = `<div class="tile wide" data-key="set:helpclose" style="--i:0"><span class="name">Got it</span><span class="val">hold here to go back to the keyboard</span></div>${HELP_HTML}`;
     return;
   }
   $("menu").innerHTML = `<p class="hint">Eyes closed 1 second recentres the cursor. 3 seconds recalibrates.</p>` + SETTINGS.map((it, i) =>
@@ -1466,7 +1541,7 @@ function runSetting(id) {
 addEventListener("mousemove", (e) => { if (!usingCamera || !pointer.ready) movePointer(e.clientX, e.clientY, performance.now()); });
 addEventListener("mousedown", (e) => {
   const el = keyAt(e.clientX, e.clientY);
-  if (el && typer) { e.preventDefault(); press(el, e.clientX, e.clientY); armed = false; hoverSince = performance.now(); }
+  if (el && typer) { e.preventDefault(); press(el, e.clientX, e.clientY); afterPress(el); armed = false; hoverSince = performance.now(); }
 });
 setInterval(() => { if (cursorAt && (!usingCamera || !pointer.ready)) movePointer(cursorAt[0], cursorAt[1], performance.now()); }, 33);
 addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); acceptGhost("tab"); } });
